@@ -1,0 +1,935 @@
+.edit-account {
+  --ea-bg: #f3f8f4;
+  --ea-surface: #ffffff;
+  --ea-surface-soft: #f8fcf9;
+  --ea-border: #d7e6d9;
+  --ea-border-strong: #bfd4c2;
+  --ea-text: #173122;
+  --ea-muted: #607667;
+  --ea-primary: #0f5a20;
+  --ea-primary-strong: #063a12;
+  --ea-primary-soft: #eef8ef;
+  --ea-shadow: 0 18px 42px rgba(15, 90, 32, 0.08);
+  --ea-radius-xl: 26px;
+  --ea-radius-lg: 18px;
+  --ea-radius-md: 14px;
+  --ea-success: #2e7d32;
+  --ea-danger: #dc2626;
+
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top right, rgba(15, 90, 32, 0.08), transparent 24%),
+    linear-gradient(180deg, #f5faf6 0%, #edf5ef 100%);
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.ea-page-shell {
+  max-width: 1380px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* HERO */
+.ea-hero-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.85fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.ea-hero-copy,
+.ea-hero-stats {
+  background: var(--ea-surface);
+  border: 1px solid var(--ea-border);
+  border-radius: var(--ea-radius-xl);
+  box-shadow: var(--ea-shadow);
+}
+
+.ea-hero-copy {
+  padding: 28px 30px;
+}
+
+.ea-kicker {
+  display: inline-block;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ea-primary);
+}
+
+.ea-page-title {
+  margin: 0 0 10px;
+  font-size: 34px;
+  line-height: 1.08;
+  color: var(--ea-primary-strong);
+}
+
+.ea-page-subtitle {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--ea-muted);
+}
+
+.ea-hero-stats {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf8 100%);
+}
+
+.ea-stat-card {
+  border: 1px solid var(--ea-border);
+  background: var(--ea-surface-soft);
+  border-radius: 16px;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ea-stat-card span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ea-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ea-stat-card strong {
+  font-size: 22px;
+  color: var(--ea-primary);
+}
+
+.ea-stat-card.emphasis {
+  background: linear-gradient(180deg, #eef8ef 0%, #e7f4e9 100%);
+  border-color: #b9d3be;
+}
+
+/* WORKSPACE */
+.ea-workspace {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.ea-sidebar-card,
+.ea-editor-card {
+  background: var(--ea-surface);
+  border: 1px solid var(--ea-border);
+  border-radius: var(--ea-radius-xl);
+  box-shadow: var(--ea-shadow);
+  min-height: 640px;
+}
+
+.ea-sidebar-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ea-editor-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ea-sidebar-head {
+  padding: 20px 20px 14px;
+  border-bottom: 1px solid var(--ea-border);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf8 100%);
+}
+
+.ea-sidebar-head h2 {
+  margin: 0 0 6px;
+  font-size: 21px;
+  color: var(--ea-primary-strong);
+}
+
+.ea-sidebar-head p {
+  margin: 0;
+  color: var(--ea-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.ea-listbar {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--ea-border);
+  background: #fff;
+}
+
+.ea-list-search {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--ea-border-strong);
+  padding: 0 14px;
+  outline: none;
+  background: #fff;
+  color: var(--ea-text);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  box-sizing: border-box;
+}
+
+.ea-list-search::placeholder {
+  color: #87a08d;
+}
+
+.ea-list-search:focus {
+  border-color: var(--ea-primary);
+  box-shadow: 0 0 0 4px rgba(15, 90, 32, 0.1);
+}
+
+.ea-list {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ea-list-empty {
+  border: 1px dashed var(--ea-border-strong);
+  border-radius: 14px;
+  background: var(--ea-surface-soft);
+  padding: 18px;
+  text-align: center;
+  color: var(--ea-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ea-item {
+  width: 100%;
+}
+
+.ea-head {
+  width: 100%;
+  border: 1px solid var(--ea-border);
+  background: linear-gradient(180deg, #ffffff, var(--ea-surface-soft));
+  border-radius: 14px;
+  padding: 12px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.05);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  text-align: left;
+}
+
+.ea-head:hover {
+  transform: translateY(-1px);
+  border-color: var(--ea-border-strong);
+  box-shadow: 0 10px 18px rgba(2, 6, 23, 0.08);
+}
+
+.ea-head.is-active {
+  border-color: var(--ea-primary);
+  box-shadow: 0 12px 22px rgba(15, 90, 32, 0.12);
+  background: linear-gradient(180deg, #ffffff 0%, #eef8ef 100%);
+}
+
+.ea-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ea-head-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--ea-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.ea-head-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ea-username {
+  color: var(--ea-text);
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ea-email {
+  color: var(--ea-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ea-role,
+.ea-role-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.ea-role-drrmo {
+  background: #eef5ff;
+  color: #2563eb;
+}
+
+.ea-role-barangay {
+  background: #eef8ef;
+  color: var(--ea-primary);
+}
+
+/* RIGHT SIDE */
+.ea-countbar {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--ea-border);
+  color: #8aa093;
+  font-size: 13px;
+  font-weight: 700;
+  background: #ffffff;
+}
+
+.ea-placeholder {
+  flex: 1;
+  margin: 18px;
+  border: 1px dashed var(--ea-border-strong);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fcf9 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ea-placeholder--centered {
+  text-align: center;
+  padding: 24px;
+}
+
+.ea-empty-illustration {
+  font-size: 42px;
+  margin-bottom: 14px;
+}
+
+.ea-empty-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ea-primary-strong);
+  margin-bottom: 6px;
+}
+
+.ea-empty-sub {
+  color: var(--ea-muted);
+  font-size: 14px;
+  max-width: 34ch;
+  line-height: 1.55;
+  margin: 0 auto;
+}
+
+.ea-editor-scroll {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ea-profile-card,
+.ea-section-block {
+  border: 1px solid var(--ea-border);
+  border-radius: 20px;
+  background: var(--ea-surface);
+  box-shadow: 0 8px 18px rgba(2, 6, 23, 0.04);
+}
+
+.ea-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf8 100%);
+}
+
+.ea-profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--ea-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.ea-profile-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.ea-profile-copy h3 {
+  margin: 0 0 5px;
+  font-size: 22px;
+  color: var(--ea-primary-strong);
+}
+
+.ea-profile-copy p {
+  margin: 0;
+  color: var(--ea-muted);
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.ea-section-block {
+  padding: 18px;
+}
+
+.ea-section-header {
+  margin-bottom: 14px;
+}
+
+.ea-section-header h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--ea-primary-strong);
+}
+
+.ea-section-header p {
+  margin: 0;
+  color: var(--ea-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ea-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.ea-field {
+  min-width: 0;
+}
+
+.ea-field-full {
+  grid-column: 1 / -1;
+}
+
+.ea-field label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ea-primary);
+}
+
+.ea-field input {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  border: 1px solid var(--ea-border-strong);
+  padding: 0 14px;
+  outline: none;
+  background: #fff;
+  color: var(--ea-text);
+  box-sizing: border-box;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.ea-field input::placeholder {
+  color: #87a08d;
+}
+
+.ea-field input:focus {
+  border-color: var(--ea-primary);
+  box-shadow: 0 0 0 4px rgba(15, 90, 32, 0.1);
+  transform: translateY(-1px);
+}
+
+.ea-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ea-btn {
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: none;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.ea-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ea-btn:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.ea-btn-primary {
+  background: linear-gradient(180deg, var(--ea-success) 0%, #1f6a27 100%);
+  color: #fff;
+  box-shadow: 0 14px 26px rgba(46, 125, 50, 0.18);
+}
+
+.ea-btn-danger {
+  background: linear-gradient(180deg, #ef4444 0%, var(--ea-danger) 100%);
+  color: #fff;
+  box-shadow: 0 14px 26px rgba(220, 38, 38, 0.16);
+}
+
+/* ANIMATION */
+.ea-hero-copy,
+.ea-hero-stats,
+.ea-sidebar-card,
+.ea-editor-card,
+.ea-profile-card,
+.ea-section-block,
+.ea-placeholder {
+  animation: eaFadeUp 0.38s ease;
+}
+
+@keyframes eaFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* RESPONSIVE */
+@media (max-width: 1180px) {
+  .ea-hero-card {
+    grid-template-columns: 1fr;
+  }
+
+  .ea-hero-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    display: grid;
+  }
+
+  .ea-workspace {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 920px) {
+  .edit-account {
+    padding: 16px;
+  }
+
+  .ea-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .ea-sidebar-card,
+  .ea-editor-card {
+    min-height: auto;
+  }
+
+  .ea-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ea-field-full {
+    grid-column: auto;
+  }
+
+  .ea-hero-copy,
+  .ea-sidebar-head,
+  .ea-editor-scroll,
+  .ea-section-block,
+  .ea-profile-card {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .ea-hero-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .edit-account {
+    padding: 12px;
+  }
+
+  .ea-page-shell {
+    gap: 16px;
+  }
+
+  .ea-page-title {
+    font-size: 26px;
+  }
+
+  .ea-hero-copy,
+  .ea-sidebar-card,
+  .ea-editor-card {
+    border-radius: 20px;
+  }
+
+  .ea-hero-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .ea-actions {
+    flex-direction: column;
+  }
+
+  .ea-btn {
+    width: 100%;
+  }
+
+  .ea-profile-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}
+/* === Move toolbar into right panel: hide the old top bar === */
+.ea-toolbar { display: none !important; }
+
+/* === New inline header beside the sidebar (inside .ea-editor) === */
+.ea-inlinebar {
+  /* sits at the top of the right panel */
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  position: sticky;    /* optional: keep visible while scrolling the form */
+  top: 0;
+  z-index: 5;
+}
+
+.ea-inline-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ea-inline-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Reuse your existing input/button styles; adjust for the light header */
+.ea-input-inline {
+  height: 34px;
+  background: #fff;
+  color: #0f172a;
+  border-color: var(--border-strong);
+}
+.ea-input-inline::placeholder { color: #64748b; }
+
+.ea-back-inline {
+  height: 34px;
+  background: #1f2937;
+  border-color: #374151;
+}
+
+/* Ensure the editor content scrolls nicely under the sticky inline header */
+.ea-editor {
+  display: grid;
+  grid-template-rows: auto 1fr; /* header + content */
+  min-height: 0;
+}
+/* === Remove the old full-width top toolbar === */
+.ea-toolbar { display: none !important; }
+
+/* === LEFT: sticky search bar at top of the list === */
+.ea-sidebar {
+  display: grid;
+  grid-template-rows: auto 1fr;   /* search bar + list */
+  padding: 0;                      /* the list tiles already have padding */
+}
+.ea-listbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #ffffff;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ea-list-search {
+  width: 100%;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  padding: 0 12px;
+  outline: none;
+  background: #fff;
+  color: var(--text);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.ea-list-search::placeholder { color: #94a3b8; }
+.ea-list-search:focus { border-color: var(--accent); box-shadow: var(--ring); }
+
+/* Left list area scrolls under the sticky search */
+.ea-list {
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* === RIGHT: thin count bar across the top of the editor === */
+.ea-editor {
+  display: grid;
+  grid-template-rows: auto 1fr;  /* count bar + content */
+  min-height: 0;
+}
+.ea-countbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
+  color: #9aa5b1;                /* muted label text */
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Keep the right panel card/form scrolling nicely */
+.ea-placeholder,
+.ea-form {
+  margin: 12px;
+}
+/* === Tweaks: smaller left panel + fix cut-off inputs on the right === */
+
+/* 1) Width knobs you can adjust */
+.edit-account {
+  --ea-left: 300px;       /* left list column width (was 340px). Try 280–320px */
+  --ea-label-w: 180px;    /* label column width on the right */
+  --ea-input-min: 320px;  /* minimal comfortable input width */
+}
+
+/* 2) Shrink the left column of the two-panel grid */
+.ea-two-col {
+  grid-template-columns: var(--ea-left) minmax(0, 1fr) !important;
+}
+
+/* 3) Make sure the left column contents don’t clip and still scroll nicely */
+.ea-sidebar {
+  min-width: 0;      /* allow shrinking without overflow */
+  overflow: hidden;  /* we control scroll in the list area */
+}
+.ea-list { overflow-y: auto; }
+
+/* 4) Right editor: make the form use a label column + flexible input column
+      so inputs never get cut on the right side. */
+.ea-editor { min-width: 0; } /* allow the editor to shrink without forcing overflow */
+
+.ea-form {
+  /* label column + input column that can grow */
+  grid-template-columns: var(--ea-label-w) minmax(0, 1fr) !important;
+  column-gap: 14px;
+}
+
+/* Ensure every label/input pair stays on one row */
+.ea-form > label { grid-column: 1; align-self: center; min-width: 0; }
+.ea-form > input { grid-column: 2; min-width: 0; }
+
+/* Inputs fill the available space and never overflow their grid cell */
+.ea-form > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 5) Buttons row still spans full width */
+.ea-actions { grid-column: 1 / -1; }
+
+/* 6) Responsive: on smaller screens, stack the form to 1 column */
+@media (max-width: 1080px) {
+  .ea-form {
+    grid-template-columns: 1fr !important;
+  }
+  .ea-form > label { grid-column: 1; }
+  .ea-form > input { grid-column: 1; }
+}
+
+/* 7) If any container adds padding that shrinks the usable area,
+      ensure the editor’s content can scroll inside without clipping */
+.ea-placeholder,
+.ea-form {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* 8) Safety: prevent any accidental horizontal scrolling due to long text */
+.ea-editor,
+.ea-form,
+.ea-list {
+  overflow-x: hidden;
+}/* === Smaller LEFT panel + safe RIGHT inputs (v2) === */
+
+/* 1) Width knobs — adjust these if you want it tighter/wider */
+.edit-account {
+  --ea-left: 272px;      /* left list width (try 260–280px). Previously 300px */
+  --ea-label-w: 168px;   /* label column width on the right (try 150–180px) */
+  --ea-input-min: 300px; /* minimum comfy input width on the right */
+}
+
+/* 2) Apply the slimmer left column */
+.ea-two-col {
+  grid-template-columns: var(--ea-left) minmax(0, 1fr) !important;
+  min-width: 0;
+}
+
+/* 3) Left panel safety: allow shrink & scroll correctly */
+.ea-sidebar {
+  min-width: 0;         /* enables grid to shrink without overflow */
+  overflow: hidden;     /* scroll is on .ea-list */
+}
+.ea-list { overflow-y: auto; }
+
+/* 4) Right editor: label column + flexible input column. No cut-offs. */
+.ea-editor { min-width: 0; }   /* lets inputs use remaining width */
+
+.ea-form {
+  grid-template-columns: var(--ea-label-w) minmax(var(--ea-input-min), 1fr) !important;
+  column-gap: 14px;
+  min-width: 0;
+}
+
+/* Labels & inputs stay on the same row */
+.ea-form > label { grid-column: 1; align-self: center; min-width: 0; }
+.ea-form > input { 
+  grid-column: 2; 
+  min-width: 0;           /* allow shrinking */
+  width: 100%;            /* fill the flexible column */
+  box-sizing: border-box; 
+}
+
+/* 5) Buttons row spans both columns */
+.ea-actions { grid-column: 1 / -1; }
+
+/* 6) Responsive: stack to single column when narrower */
+@media (max-width: 1080px) {
+  .ea-form { grid-template-columns: 1fr !important; }
+  .ea-form > label { grid-column: 1; }
+  .ea-form > input { grid-column: 1; }
+}
+
+/* 7) No horizontal scroll leaks */
+.ea-editor, .ea-form, .ea-list { overflow-x: hidden; }
+/* === LEFT PANEL a bit smaller + RIGHT inputs capped (no cut-offs) === */
+
+/* 1) Knobs you can tune quickly */
+.edit-account {
+  --ea-left: 256px;       /* left list column width (was 272/300/340). Try 248–264px */
+  --ea-label-w: 160px;    /* label column width on the right (try 150–170px) */
+  --ea-input-min: 280px;  /* minimum comfortable input width */
+  --ea-input-max: 680px;  /* ⬅️ CAP input/row max width to avoid “too wide” */
+  --ea-form-pad-x: 16px;  /* inner horizontal padding for the right card */
+}
+
+/* 2) Apply slimmer left column */
+.ea-two-col {
+  grid-template-columns: var(--ea-left) minmax(0, 1fr) !important;
+  min-width: 0;
+}
+
+/* Left column safety */
+.ea-sidebar { min-width: 0; overflow: hidden; }
+.ea-list    { overflow-y: auto; }
+
+/* 3) Right editor grid: label column + flexible input column */
+.ea-editor { min-width: 0; }
+
+.ea-form {
+  grid-template-columns: var(--ea-label-w) minmax(var(--ea-input-min), 1fr) !important;
+  column-gap: 14px;
+  min-width: 0;
+  /* keep card readable width + avoid edge-to-edge stretching on huge screens */
+  max-width: calc(var(--ea-label-w) + var(--ea-input-max) + var(--ea-form-pad-x) * 2);
+  margin-inline: var(--ea-form-pad-x);
+}
+
+/* Keep countbar aligned with the form cap */
+.ea-countbar {
+  padding-inline: var(--ea-form-pad-x);
+}
+
+/* Labels & inputs on the same row; inputs fill available column */
+.ea-form > label { grid-column: 1; align-self: center; min-width: 0; }
+.ea-form > input {
+  grid-column: 2;
+  min-width: 0;
+  width: 100%;
+  max-width: var(--ea-input-max);  /* ⬅️ hard cap so fields don’t become too wide */
+  box-sizing: border-box;
+}
+
+/* Buttons row spans both columns and respects the cap */
+.ea-actions {
+  grid-column: 1 / -1;
+  max-width: calc(var(--ea-label-w) + var(--ea-input-max));
+  width: 100%;
+}
+
+/* 4) Responsive: stack to single column on narrower screens */
+@media (max-width: 1080px) {
+  .ea-form {
+    grid-template-columns: 1fr !important;
+    max-width: min(92vw, var(--ea-input-max));
+  }
+  .ea-form > label,
+  .ea-form > input {
+    grid-column: 1 !important;
+  }
+  .ea-actions {
+    max-width: min(92vw, var(--ea-input-max));
+  }
+}
+
+/* 5) No horizontal scroll leaks */
+.ea-editor, .ea-form, .ea-list { overflow-x: hidden; }

@@ -1,0 +1,112 @@
+.acc-page {
+  min-height: 100%;
+  padding: 24px;
+  background: linear-gradient(180deg, #f5f8f5 0%, #edf4ee 100%);
+}
+
+.acc-shell {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* HEADER */
+.acc-header-card {
+  background: #ffffff;
+  border: 1px solid #dce9de;
+  box-shadow: 0 14px 32px rgba(20, 83, 45, 0.08);
+  border-radius: 24px;
+  padding: 28px 30px;
+}
+
+.acc-kicker {
+  font-size: 12px;
+  font-weight: 800;
+  color: #166534;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.acc-title {
+  font-size: 30px;
+  margin: 8px 0;
+  color: #0f3d21;
+}
+
+.acc-subtitle {
+  font-size: 14px;
+  color: #5e7365;
+}
+
+/* TABS */
+.acc-tabs {
+  display: flex;
+  gap: 10px;
+  background: #ecfdf3;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid #dce9de;
+}
+
+.acc-tab {
+  border: none;
+  background: transparent;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #166534;
+  transition: 0.2s;
+}
+
+.acc-tab:hover {
+  background: rgba(255,255,255,0.6);
+}
+
+.acc-tab.active {
+  background: white;
+  box-shadow: 0 6px 18px rgba(20,83,45,0.1);
+}
+
+/* CONTENT */
+.acc-content {
+  background: white;
+  border-radius: 20px;
+  border: 1px solid #dce9de;
+  padding: 16px;
+  box-shadow: 0 14px 32px rgba(20, 83, 45, 0.08);
+}
+
+/* =========================
+   TAB ANIMATION
+========================= */
+.acc-animated {
+  animation: fadeSlideIn 0.35s ease;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Smooth tab hover */
+.acc-tab {
+  transition: all 0.2s ease;
+}
+
+.acc-tab:hover {
+  transform: translateY(-1px);
+}
+
+/* Active tab pop */
+.acc-tab.active {
+  transform: scale(1.03);
+}

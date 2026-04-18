@@ -1,0 +1,160 @@
+const mongoose = require("mongoose");
+
+const releaseItemSchema = new mongoose.Schema(
+  {
+    inventoryItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InventoryItem",
+      default: null,
+    },
+
+    itemName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // ✅ UPDATED — REMOVE ENUM
+    category: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    quantityReleased: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    unit: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    remarks: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+  },
+  { _id: false }
+);
+
+const reliefReleaseSchema = new mongoose.Schema(
+  {
+    reliefRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ReliefRequest",
+      required: true,
+    },
+
+    barangayId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Barangay",
+      required: true,
+    },
+
+    barangayName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    releaseNo: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+    },
+
+    items: {
+      type: [releaseItemSchema],
+      default: [],
+      validate: {
+        validator: function (value) {
+          return Array.isArray(value) && value.length > 0;
+        },
+        message: "At least one released item is required.",
+      },
+    },
+
+    totalItemsReleased: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    releaseStatus: {
+      type: String,
+      enum: ["draft", "released", "received", "cancelled"],
+      default: "released",
+    },
+
+    releasedBy: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    releasedAt: {
+      type: Date,
+      default: Date.now,
+    },
+
+    receivedAt: {
+      type: Date,
+      default: null,
+    },
+
+    remarks: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    isArchived: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+
+// Normalize fields before saving
+reliefReleaseSchema.pre("validate", function () {
+  const items = this.items || [];
+
+  this.items = items.map((item) => {
+    const normalizedItem = { ...item.toObject?.() ? item.toObject() : item };
+
+    if (normalizedItem.category) {
+      normalizedItem.category = String(normalizedItem.category).toLowerCase().trim();
+    }
+
+    if (normalizedItem.itemName) {
+      normalizedItem.itemName = String(normalizedItem.itemName).trim();
+    }
+
+    if (normalizedItem.unit) {
+      normalizedItem.unit = String(normalizedItem.unit).trim();
+    }
+
+    if (normalizedItem.remarks) {
+      normalizedItem.remarks = String(normalizedItem.remarks).trim();
+    }
+
+    return normalizedItem;
+  });
+});
+
+reliefReleaseSchema.pre("save", function () {
+  const items = this.items || [];
+  this.totalItemsReleased = items.reduce(
+    (sum, item) => sum + (Number(item.quantityReleased) || 0),
+    0
+  );
+});
+
+module.exports = mongoose.model("ReliefRelease", reliefReleaseSchema);

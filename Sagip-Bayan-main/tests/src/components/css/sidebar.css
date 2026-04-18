@@ -1,0 +1,228 @@
+/* src/components/css/sidebar.css */
+
+/* ===== Base: default to DARK even if ThemeProvider hasn't mounted yet ===== */
+:root {
+  --sb-bg: #032601;         /* deep green you requested */
+  --sb-bg-2: #063a0f;
+  --sb-text: #e8f1e8;
+  --sb-muted: #b9c6b9;
+  --sb-accent: #5cc11c;
+  --content-bg: #ffffff;
+  --content-text: #1b1b1b;
+}
+
+/* ===== Explicit dark mode (keeps values same as base) ===== */
+:root[data-theme="dark"] {
+
+  --sb-bg: #032601;
+  --sb-bg-2: #063a0f;
+  --sb-text: #e8f1e8;
+  --sb-muted: #b9c6b9;
+  --sb-accent: #5cc11c;
+  --content-bg: #ffffff;
+  --content-text: #1b1b1b;
+}
+
+/* ===== Light mode tokens ===== */
+:root[data-theme="light"] {
+  --sb-bg: #e3f5e3;     /* cleaner light green panel */
+  --sb-bg-2: #d3ecd3;   /* hover shade */
+  --sb-text: #0f2910;   /* dark green text */
+  --sb-muted: #6d8c6f;
+  --sb-accent: #2e7d32; /* active pill */
+
+  --content-bg: #ffffff;
+  --content-text: #111111;
+}
+
+/* =========================
+   RESET
+========================= */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--content-bg);
+  color: var(--content-text);
+}
+
+/* =========================
+   MAIN LAYOUT (FIXED CLEAN)
+========================= */
+.admin-layout {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.admin-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.admin-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px;
+  scrollbar-gutter: stable;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+
+  background: var(--sb-bg) !important;
+  color: var(--sb-text);
+
+  display: flex;
+  flex-direction: column;
+
+  border-right: 1px solid rgba(0,0,0,0.08);
+  padding: 10px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  transition: background 0.25s ease;
+}
+
+.sidebar.collapsed {
+  width: 72px;
+}
+
+/* =========================
+   HEADER
+========================= */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.sidebar-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.toggle-btn {
+  margin-left: auto;
+  border: none;
+  background: var(--sb-accent);
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+/* =========================
+   NAVIGATION
+========================= S*/
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.sidebar-group {
+  display: grid;
+  gap: 6px;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 10px;
+  border-radius: 10px;
+
+  text-decoration: none;
+  color: var(--sb-text);
+
+  transition: background 0.2s ease;
+}
+
+.sidebar-link:hover {
+  background: var(--sb-bg-2);
+}
+
+.sidebar-link.active {
+  background: var(--sb-accent);
+  color: #fff !important;
+}
+
+.sidebar-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* =========================
+   COLLAPSED STATE
+========================= */
+.sidebar.collapsed .sidebar-link {
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-title,
+.sidebar.collapsed .sidebar-footer span {
+  display: none;
+}
+
+/* =========================
+   FOOTER (BOTTOM LOCKED)
+========================= */
+.sidebar-spacer {
+  flex: 1;
+}
+
+.sidebar-footer {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sidebar-link.is-button {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  text-align: left;
+}
+
+.sidebar-link.is-button:hover {
+  background: var(--sb-bg-2);
+}
+
+/* =========================
+   RESPONSIVE
+========================= */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    z-index: 1000;
+    height: 100vh;
+  }
+
+  .admin-content {
+    padding: 12px;
+  }
+}
