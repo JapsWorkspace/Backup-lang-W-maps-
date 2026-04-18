@@ -8,10 +8,16 @@ import {
   Animated,
   Image,
 } from "react-native";
-import MapView, { Marker, Callout, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, {
+  Marker,
+  Callout,
+  PROVIDER_GOOGLE,
+  Polygon, // ✅ ADDED
+} from "react-native-maps";
 import api from "../lib/api";
 import axios from "axios";
 import { MarkerImages, getMarkerImageBySeverity } from "./MapIcon";
+import jaenGeoJSON from "./data/jaen.json"; // ✅ ADDED
 
 /* ---------------- JAEN BOUNDS ---------------- */
 const JAEN_CENTER = { latitude: 15.3274, longitude: 120.9190 };
@@ -34,12 +40,36 @@ const isInside = (lat, lng) =>
 /* ---------------- ZOOM ---------------- */
 const zoomToDelta = (z) => 0.02 * Math.pow(2, 15 - z);
 
+/* ---------------- JAEN OUTLINE (✅ ADDED) ---------------- */
+function renderJaenBoundary() {
+  if (!jaenGeoJSON?.features) return null;
+
+  return jaenGeoJSON.features.map((feature, idx) => {
+    const coords = feature.geometry.coordinates;
+    const polygons =
+      feature.geometry.type === "MultiPolygon" ? coords : [coords];
+
+    return polygons.map((polygon, pIdx) => (
+      <Polygon
+        key={`jaen-${idx}-${pIdx}`}
+        coordinates={polygon[0].map((c) => ({
+          latitude: c[1],
+          longitude: c[0],
+        }))}
+        strokeColor="#065F46"
+        strokeWidth={2}
+        fillColor="transparent"
+      />
+    ));
+  });
+}
+
 /* ---------------- COMPONENT ---------------- */
 export default function WebMap({
   onSelect,
   selected,
   userLocation,
-  onIncidentPress, // ✅ required
+  onIncidentPress,
 }) {
   const mapRef = useRef(null);
   const [incidents, setIncidents] = useState([]);
@@ -60,11 +90,9 @@ export default function WebMap({
   const fetchIncidents = useCallback(async () => {
     try {
       const res = await api.get("/incident/getIncidents");
-
       const data = Array.isArray(res.data)
         ? res.data
         : res.data?.incidents || [];
-
       setIncidents(data);
     } catch (err) {
       console.error("Fetch error:", err?.message);
@@ -80,9 +108,7 @@ export default function WebMap({
   /* ---------------- HELPERS ---------------- */
   const focusTo = (lat, lng, zoom = 17) => {
     if (!mapRef.current) return;
-
     const d = zoomToDelta(zoom);
-
     mapRef.current.animateToRegion({
       latitude: lat,
       longitude: lng,
@@ -95,11 +121,8 @@ export default function WebMap({
     try {
       const res = await axios.get(
         "https://nominatim.openstreetmap.org/reverse",
-        {
-          params: { lat, lon: lng, format: "json" },
-        }
+        { params: { lat, lon: lng, format: "json" } }
       );
-
       return (
         res?.data?.display_name ||
         `Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`
@@ -112,7 +135,6 @@ export default function WebMap({
   /* ---------------- MAP CLICK ---------------- */
   const handlePress = async (e) => {
     const { latitude, longitude } = e.nativeEvent.coordinate;
-
     const label = await reverseGeocode(latitude, longitude);
 
     onSelect?.({
@@ -162,32 +184,22 @@ export default function WebMap({
               key={incident._id}
               coordinate={{ latitude: lat, longitude: lng }}
               onPress={(e) => {
-                e.stopPropagation(); // ✅ prevent map click
-                console.log("MARKER CLICK:", incident);
+                e.stopPropagation();
                 onIncidentPress?.(incident);
               }}
             >
               <Image source={source} style={styles.marker} />
-
-              {/* ✅ Callout also triggers (backup + UX) */}
-              <Callout
-                onPress={() => {
-                  console.log("CALLOUT CLICK:", incident);
-                  onIncidentPress?.(incident);
-                }}
-              >
+              <Callout onPress={() => onIncidentPress?.(incident)}>
                 <View style={styles.callout}>
                   <Text style={styles.title}>
                     {incident.type?.toUpperCase()}
                   </Text>
                   <Text>Status: {incident.status}</Text>
                   <Text>Severity: {incident.level}</Text>
-
                   {!!incident.location && <Text>{incident.location}</Text>}
                   {!!incident.description && (
                     <Text>{incident.description}</Text>
                   )}
-
                   {!!incident?.image?.fileUrl && (
                     <Image
                       source={{ uri: incident.image.fileUrl }}
@@ -226,6 +238,9 @@ export default function WebMap({
             <Image source={MarkerImages.default} style={styles.user} />
           </Marker>
         )}
+
+        {/* ✅ JAEN MUNICIPAL OUTLINE — ADDED */}
+        {renderJaenBoundary()}
       </MapView>
     </View>
   );

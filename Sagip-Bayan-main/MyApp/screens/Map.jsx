@@ -18,6 +18,7 @@ import MapView, {
   Marker,
   Polyline,
   PROVIDER_GOOGLE,
+  Polygon,
 } from "react-native-maps";
 
 import { useRoute, useFocusEffect } from "@react-navigation/native";
@@ -26,11 +27,11 @@ import useRouting from "./hooks/useRouting";
 import useHazardLayers from "./hooks/useHazardLayers";
 import GlobalRoutePanel from "./routing/GlobalRoutePanel";
 import { PillMarker } from "./MapIcon";
+import jaenGeoJSON from "./data/jaen.json";
 
 /* =========================
    CONSTANTS
 ========================= */
-
 const EDGE_PADDING = {
   top: 120,
   bottom: 420,
@@ -64,6 +65,32 @@ const INCIDENT_LEVEL_COLOR = {
 /* =========================
    HELPERS
 ========================= */
+
+function renderJaenBoundary() {
+  if (!jaenGeoJSON?.features) return null;
+
+  return jaenGeoJSON.features.map((feature, idx) => {
+    const coords = feature.geometry.coordinates;
+
+    const polygons =
+      feature.geometry.type === "MultiPolygon"
+        ? coords
+        : [coords];
+
+    return polygons.map((polygon, pIdx) => (
+      <Polygon
+        key={`jaen-${idx}-${pIdx}`}
+        coordinates={polygon[0].map((c) => ({
+          latitude: c[1],
+          longitude: c[0],
+        }))}
+        strokeColor="#065F46"
+        strokeWidth={2.5}
+        fillColor="transparent"
+      />
+    ));
+  });
+}
 
 function toRad(v) {
   return (v * Math.PI) / 180;
@@ -381,38 +408,40 @@ const { floodLayers, earthquakeLayer, jaenBoundaryLayer } =
 
   return (
     <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        provider={
-          Platform.OS === "android" ? PROVIDER_GOOGLE : undefined
-        }
-        style={{ flex: 1 }}
-        initialRegion={JAEN_INITIAL_REGION}
-        showsUserLocation
-        rotateEnabled={panelState === "NAVIGATION"}
-        pitchEnabled={panelState === "NAVIGATION"}
-      >
-        {/* ✅ HAZARD LAYERS */}
-        {jaenBoundaryLayer}
-        {floodLayers}
-        {earthquakeLayer}
+<MapView
+  ref={mapRef}
+  provider={
+    Platform.OS === "android" ? PROVIDER_GOOGLE : undefined
+  }
+  style={{ flex: 1 }}
+  initialRegion={JAEN_INITIAL_REGION}
+  showsUserLocation
+  rotateEnabled={panelState === "NAVIGATION"}
+  pitchEnabled={panelState === "NAVIGATION"}
+>
+  {/* ✅ JAEN MUNICIPAL BOUNDARY */}
+  {renderJaenBoundary()}
+  {/* ✅ HAZARD LAYERS */}
+  {jaenBoundaryLayer}
+  {floodLayers}
+  {earthquakeLayer}
 
-        <Marker coordinate={userPos} pinColor="#2563eb" />
+  <Marker coordinate={userPos} pinColor="#2563eb" />
 
-        {normalizedIncidents.map((incident) => (
-          <Marker
-            key={incident._id}
-            coordinate={{
-              latitude: incident.latitude,
-              longitude: incident.longitude,
-            }}
-            pinColor={
-              INCIDENT_LEVEL_COLOR[
-                String(incident.level || "critical").toLowerCase()
-              ]
-            }
-          />
-        ))}
+  {normalizedIncidents.map((incident) => (
+    <Marker
+      key={incident._id}
+      coordinate={{
+        latitude: incident.latitude,
+        longitude: incident.longitude,
+      }}
+      pinColor={
+        INCIDENT_LEVEL_COLOR[
+          String(incident.level || "critical").toLowerCase()
+        ]
+      }
+    />
+  ))}
 
         {evac && (
           <Marker coordinate={evac}>
