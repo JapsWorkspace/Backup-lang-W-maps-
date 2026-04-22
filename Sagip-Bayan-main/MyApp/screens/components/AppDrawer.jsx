@@ -105,12 +105,12 @@ export default function AppDrawer({
         <DrawerItem
           icon={iconSet.incident}
           label="Incident Tagging"
-          onPress={() => goTo("IncidentReport")}
+          onPress={() => goTo("Map", { module: "incident" })}
         />
         <DrawerItem
           icon={iconSet.digital}
           label="Digital Twin"
-          onPress={() => goTo("RiskHeatMap")}
+          onPress={() => goTo("Map", { module: "barangay" })}
         />
         <DrawerItem
           icon={iconSet.virtual}
@@ -128,10 +128,10 @@ export default function AppDrawer({
           onPress={() => goTo("Profile")}
         />
 
-        <DrawerItem
+<DrawerItem
   icon={iconSet.digital}
   label="Hazard Map"
-  onPress={() => goTo("HazardMap")}
+  onPress={() => goTo("Map", { module: "flood" })}
 />
 
         <TouchableOpacity style={styles.logout} onPress={handleLogout}>

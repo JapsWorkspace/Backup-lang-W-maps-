@@ -10,8 +10,7 @@ const bcrypt = require("bcryptjs");
 ========================= */
 /* =========================
    REGISTER
-========================= */
-const registerUser = async (req, res) => {
+========================= */const registerUser = async (req, res) => {
   try {
     const {
       fname,
@@ -20,32 +19,26 @@ const registerUser = async (req, res) => {
       password,
       email,
       phone,
-      address,
-      birthdate,
-      location,
     } = req.body || {};
 
-    if (
-      !fname ||
-      !lname ||
-      !username ||
-      !password ||
-      !email ||
-      !phone
-    ) {
-      return res.status(400).json({
-        error: "Missing required fields",
-      });
+    if (!fname || !lname || !username || !password || !email || !phone) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    /* ✅ FORMAT CHECKS */
+    // ❌ check duplicate email (IMPORTANT FIX)
+    const existingUser = await UserModel.findOne({ email });
+    if (existingUser) {
+  return res.status(400).json({
+    error: "EMAIL_EXISTS",
+    message: "Email already exists",
+  });
+}
     if (password.length < 8) {
       return res.status(400).json({
         error: "Password must be at least 8 characters",
       });
     }
 
-    /* ✅ ✅ ✅ ONLY FIX */
     const hashedPassword = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(32).toString("hex");
 
@@ -59,20 +52,25 @@ const registerUser = async (req, res) => {
 
     const user = await newUser.save();
 
+    // 🔥 FIXED: use REAL domain (NOT local IP)
+    const baseUrl = process.env.BASE_URL || "http://localhost:8000";
+
     const verificationLink =
-      `http://192.168.1.8:8000/user/verify/${verificationToken}`;
+      `${baseUrl}/user/verify/${verificationToken}`;
 
-    await sendVerificationEmail(user.email, verificationLink);
+    // 🔥 IMPORTANT: actually send email
+    await sendVerificationEmail(user.email, verificationLink, user.fname);
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "Registration successful. Please verify your email.",
+      emailSent: true,
     });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Registration failed" });
   }
 };
-
 /* =========================
    VERIFY EMAIL
 ========================= */

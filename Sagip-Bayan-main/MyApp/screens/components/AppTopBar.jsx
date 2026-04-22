@@ -53,24 +53,30 @@ export default function AppTopBar({
   return (
     <View style={styles.wrapper}>
       <View style={styles.container}>
-        <TouchableOpacity onPress={onMenuPress}>
-          <Ionicons name="menu" size={28} color="#000" />
+        <TouchableOpacity style={styles.iconButton} onPress={onMenuPress}>
+          <Ionicons name="menu" size={24} color="#10251b" />
         </TouchableOpacity>
 
         {showSearch && (
-          <TextInput
-            placeholder="Search place in Jaen"
-            style={styles.search}
-            value={value}
-            onChangeText={handleChangeText}
-            autoCorrect={false}
-            autoCapitalize="none"
-            clearButtonMode="while-editing"
-            returnKeyType="search"
-          />
+          <View style={styles.searchWrap}>
+            <Ionicons name="search-outline" size={17} color="#6b7280" />
+            <TextInput
+              placeholder="Search place in Jaen"
+              style={styles.search}
+              value={value}
+              onChangeText={handleChangeText}
+              autoCorrect={false}
+              autoCapitalize="none"
+              clearButtonMode="while-editing"
+              returnKeyType="search"
+              placeholderTextColor="#7b867f"
+            />
+          </View>
         )}
 
-        <Ionicons name="person-circle" size={32} color="#444" />
+        <TouchableOpacity style={styles.profileButton}>
+          <Ionicons name="person-circle-outline" size={25} color="#10251b" />
+        </TouchableOpacity>
       </View>
 
       {/* ✅ Suggestions dropdown */}
@@ -115,28 +121,65 @@ const styles = StyleSheet.create({
   },
 
   container: {
-    backgroundColor: "#fff",
-    borderRadius: 30,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 6,
+    gap: 10,
     pointerEvents: "auto",
+  },
+
+  iconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.94)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    elevation: 7,
+  },
+
+  profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.94)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    elevation: 7,
+  },
+
+  searchWrap: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    paddingHorizontal: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    elevation: 7,
   },
 
   search: {
     flex: 1,
-    marginHorizontal: 12,
+    marginLeft: 8,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: "#10251b",
   },
 
   dropdown: {
-    marginTop: 6,
-    backgroundColor: "#fff",
-    borderRadius: 12,
+    marginTop: 8,
+    backgroundColor: "rgba(255,255,255,0.98)",
+    borderRadius: 16,
     maxHeight: 220,
-    elevation: 6,
+    elevation: 8,
     pointerEvents: "auto",
+    overflow: "hidden",
   },
 
   item: {

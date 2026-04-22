@@ -9,4 +9,21 @@ export default StyleSheet.create({
   input: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 8, padding: 12, marginBottom: 12 },
   button: { backgroundColor: "#166534", padding: 14, borderRadius: 8 },
   buttonText: { color: "#fff", fontWeight: "700", textAlign: "center" },
+  inputWrapper: {
+  position: "relative",
+  marginBottom: 12,
+},
+
+eyeIcon: {
+  position: "absolute",
+  right: 12,
+  top: 14,
+},
+
+error: {
+  color: "#DC2626",
+  fontSize: 12,
+  marginBottom: 6,
+},
+
 });

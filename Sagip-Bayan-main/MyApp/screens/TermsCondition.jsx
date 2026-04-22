@@ -1,75 +1,64 @@
+// screens/TermsCondition.jsx
 import React from "react";
-import { View, Text, ScrollView, Pressable, Image } from "react-native";
-import styles from "../Designs/privacyStyles";
+import { View, Text, ScrollView, Pressable, Image, StyleSheet } from "react-native";
 
 export default function TermsCondition({ accepted, setAccepted }) {
   return (
-    <View style={styles.slide}>
+    <View style={styles.screen}>
+      {/* ILLUSTRATION */}
+      <View style={styles.illustrationContainer}>
+        <Image
+          source={require("../stores/assets/terms.png")}
+          style={styles.image}
+        />
+      </View>
 
-      {/* IMAGE */}
-      <Image
-        source={require("../stores/assets/terms.png")}
-        style={styles.image}
-      />
-
-      {/* TITLE */}
-      <Text style={styles.title}>Terms & Conditions</Text>
-
-      {/* SHORT DESCRIPTION */}
-      <Text style={styles.subtitle}>
-        Please read carefully before using the SagipBayan platform.
-      </Text>
-
-      {/* SCROLLABLE PANEL */}
-      <View style={styles.panel}>
-        <ScrollView showsVerticalScrollIndicator={true}>
-          
-          {/* ✅ YOUR TEXT — UNCHANGED */}
+      {/* GRAY CARD */}
+      <View style={styles.card}>
+        <ScrollView
+          showsVerticalScrollIndicator
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.cardContent}
+        >
           <Text style={styles.paragraph}>
-            By accessing or using SagipBayan, users acknowledge that they have read,
-            understood, and agreed to be bound by these Terms and Conditions.
-          </Text>
-
-          <Text style={styles.sectionHeader}>User Responsibilities</Text>
-
-          <Text style={styles.bullet}>
-            • Provide accurate and truthful information when registering and using the system.
+            SagipBayan collects the following personal and operational data,
+            each tied to a specific purpose:
           </Text>
 
           <Text style={styles.bullet}>
-            • Use the platform strictly for disaster-related purposes only.
+            • <Text style={styles.bold}>User Responsibility</Text> – Provide
+            accurate and truthful information when registering and using the
+            system.
           </Text>
 
           <Text style={styles.bullet}>
-            • Maintain confidentiality of account credentials.
+            • <Text style={styles.bold}>Proper Usage</Text> – Use the platform
+            strictly for disaster‑related purposes only.
           </Text>
 
           <Text style={styles.bullet}>
-            • Do not engage in activities that may harm, disrupt, or exploit the system.
+            • <Text style={styles.bold}>Account Security</Text> – Maintain
+            confidentiality of account credentials.
+          </Text>
+
+          <Text style={styles.bullet}>
+            • <Text style={styles.bold}>System Integrity</Text> – Do not submit
+            false reports, upload malicious content, or attempt to manipulate
+            the system.
           </Text>
 
           <Text style={styles.paragraph}>
-            Users are strictly prohibited from submitting false disaster reports,
-            uploading malicious content, impersonating individuals or officials,
-            or attempting to hack or manipulate the system.
+            All system components, including features and simulation modules,
+            are the intellectual property of the developers.
           </Text>
-
-          <Text style={styles.sectionHeader}>Intellectual Property</Text>
 
           <Text style={styles.paragraph}>
-            All system components, including design, features, Digital Twin and
-            Virtual Twin modules, are the intellectual property of the developers.
-            Unauthorized reproduction or modification is strictly prohibited.
+            SagipBayan is provided on an “as‑is” basis as a capstone project
+            prototype.
           </Text>
 
-          <Text style={styles.sectionHeader}>Disclaimer</Text>
-
-          <Text style={styles.paragraph}>
-            SagipBayan is developed as a Capstone Project prototype and is provided
-            on an “as-is” basis.
-          </Text>
-
-          {/* ✅ ACCEPT CHECKBOX */}
+          {/* ACCEPT CHECKBOX */}
           <Pressable
             style={styles.acceptRow}
             onPress={() => setAccepted(!accepted)}
@@ -81,12 +70,92 @@ export default function TermsCondition({ accepted, setAccepted }) {
               ]}
             />
             <Text style={styles.acceptText}>
-              I have read and agree to the Terms & Conditions and Data Privacy Policy
+              I accept the Terms and Conditions and Data Privacy Policy
             </Text>
           </Pressable>
 
+          {/* space so scroll never hits button */}
+          <View style={{ height: 40 }} />
         </ScrollView>
       </View>
     </View>
   );
 }
+
+/* ================= STYLES ================= */
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+
+  illustrationContainer: {
+    alignItems: "center",
+    paddingTop: 24,
+    paddingBottom: 12,
+  },
+
+  image: {
+    width: 220,
+    height: 200,
+    resizeMode: "contain",
+  },
+
+  card: {
+    flex: 1,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    backgroundColor: "#E5E7EB", // ✅ matches screenshot
+    borderRadius: 16,
+  },
+
+  cardContent: {
+    padding: 16,
+    paddingBottom: 24,
+  },
+
+  paragraph: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#111827",
+    marginBottom: 12,
+  },
+
+  bullet: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#111827",
+    marginBottom: 10,
+  },
+
+  bold: {
+    fontWeight: "700",
+  },
+
+  acceptRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 12,
+  },
+
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderWidth: 2,
+    borderColor: "#166534",
+    borderRadius: 4,
+    marginRight: 10,
+    marginTop: 2,
+  },
+
+  checkboxChecked: {
+    backgroundColor: "#166534",
+  },
+
+  acceptText: {
+    fontSize: 13,
+    color: "#111827",
+    flex: 1,
+  },
+});

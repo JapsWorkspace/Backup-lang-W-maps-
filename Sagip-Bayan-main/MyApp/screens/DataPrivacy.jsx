@@ -1,87 +1,120 @@
+// screens/DataPrivacy.jsx
 import React from "react";
-import { View, Text, ScrollView, Image } from "react-native";
-import styles from "../Designs/privacyStyles";
+import { View, Text, ScrollView, Image, StyleSheet } from "react-native";
 
 export default function DataPrivacy() {
   return (
-    <View style={styles.slide}>
-      
-      {/* IMAGE */}
-      <Image
-        source={require("../stores/assets/privacy.png")}
-        style={styles.image}
-      />
+    <View style={styles.screen}>
+      {/* ILLUSTRATION */}
+      <View style={styles.illustrationContainer}>
+        <Image
+          source={require("../stores/assets/privacy.png")}
+          style={styles.image}
+        />
+      </View>
 
-      {/* TITLE */}
-      <Text style={styles.title}>Data Privacy Policy</Text>
-
-      {/* SHORT DESCRIPTION */}
-      <Text style={styles.subtitle}>
-        Your privacy matters. Below explains what data SagipBayan collects and how it is used.
-      </Text>
-
-      {/* SCROLLABLE PANEL */}
-      <View style={styles.panel}>
-        <ScrollView showsVerticalScrollIndicator={true}>
-          
-          {/* ✅ YOUR TEXT — UNCHANGED */}
+      {/* CARD / PANEL */}
+      <View style={styles.card}>
+        <ScrollView
+          showsVerticalScrollIndicator
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.cardContent}
+        >
           <Text style={styles.paragraph}>
-            SagipBayan is committed to protecting the privacy and security of user data
-            in accordance with the Data Privacy Act of 2012 (Republic Act No. 10173).
-          </Text>
-
-          <Text style={styles.sectionHeader}>Collected Information</Text>
-
-          <Text style={styles.bullet}>
-            • Name and Email Address – Used for account creation, identification,
-            communication, and notifications.
+            SagipBayan collects the following personal and operational data, each
+            tied to a specific purpose:
           </Text>
 
           <Text style={styles.bullet}>
-            • Encrypted Password – Used solely for authentication and account security.
+            • <Text style={styles.bold}>Name and Email Address</Text> – Collected
+            for account creation, identification, communication, and sending
+            notifications.
           </Text>
 
           <Text style={styles.bullet}>
-            • Location Data – Used to display incidents, support evacuation planning,
-            and enhance disaster visualization.
+            • <Text style={styles.bold}>Encrypted Password</Text> – Used for
+            authentication and maintaining account security.
           </Text>
 
           <Text style={styles.bullet}>
-            • Incident Report Data – Includes disaster type, descriptions, images,
-            timestamps, and coordinates to support real-time response and planning.
+            • <Text style={styles.bold}>Location Data</Text> – Collected to
+            accurately display incidents on hazard maps, support evacuation
+            planning, and enhance disaster response.
           </Text>
 
           <Text style={styles.bullet}>
-            • Safety Status Updates – Voluntarily shared to inform family members
-            and authorities during disasters.
+            • <Text style={styles.bold}>Incident Reports</Text> – Includes
+            descriptions, images, timestamps, and coordinates for situational
+            awareness.
           </Text>
 
           <Text style={styles.bullet}>
-            • Historical Data for Virtual Twin – Used exclusively for disaster
-            simulations and preparedness.
+            • <Text style={styles.bold}>Safety Status Updates</Text> – Shared
+            voluntarily to inform authorities and relatives during disasters.
           </Text>
 
           <Text style={styles.bullet}>
-            • Evacuation Center Capacity – Displayed publicly without personal
-            information of evacuees.
+            • <Text style={styles.bold}>Historical & Simulation Data</Text> –
+            Used to support analytics, preparedness, and system improvement.
           </Text>
 
-          <Text style={styles.bullet}>
-            • Donation Records – Used to ensure transparency and support relief efforts.
-          </Text>
-
-          <Text style={styles.bullet}>
-            • CCTV and OpenCV Data – Used for hazard recognition, monitoring, and
-            disaster response support.
-          </Text>
-
-          <Text style={styles.paragraph}>
-            All collected data is used strictly to support system functionality and
-            improve disaster preparedness and management.
-          </Text>
-
+          {/* Space so content never gets cut */}
+          <View style={{ height: 40 }} />
         </ScrollView>
       </View>
     </View>
   );
 }
+
+/* ================= STYLES ================= */
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+
+  illustrationContainer: {
+    alignItems: "center",
+    paddingTop: 24,
+    paddingBottom: 12,
+  },
+
+  image: {
+    width: 220,
+    height: 200,
+    resizeMode: "contain",
+  },
+
+  card: {
+    flex: 1,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    backgroundColor: "#E5E7EB", // light gray like the image
+    borderRadius: 16,
+  },
+
+  cardContent: {
+    padding: 16,
+    paddingBottom: 24,
+  },
+
+  paragraph: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#111827",
+    marginBottom: 12,
+  },
+
+  bullet: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#111827",
+    marginBottom: 10,
+  },
+
+  bold: {
+    fontWeight: "700",
+  },
+});

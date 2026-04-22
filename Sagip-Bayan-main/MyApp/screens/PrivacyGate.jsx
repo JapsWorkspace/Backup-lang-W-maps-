@@ -5,8 +5,11 @@ import PrivacySwiper from "./PrivacySwiper";
 export default function PrivacyGate({ navigation }) {
   const handleAccept = async () => {
     await AsyncStorage.setItem("privacyAccepted", "true");
-    navigation.replace("SignUp");
+
+    // ✅ EXIT the privacy flow permanently
+    navigation.replace("RegisterFlow");
   };
 
   return <PrivacySwiper onAccept={handleAccept} />;
 }
+``

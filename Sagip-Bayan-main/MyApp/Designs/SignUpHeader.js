@@ -1,9 +1,9 @@
-import { StyleSheet } from "react-native";
+import { StyleSheet, Platform, StatusBar } from "react-native";
 
 export default StyleSheet.create({
   container: {
-    paddingTop: 40,
-    paddingBottom: 12,
+    paddingTop: (StatusBar.currentHeight || 0) + 24,
+    paddingHorizontal: 20,
     backgroundColor: "#fff",
   },
 
@@ -11,24 +11,25 @@ export default StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
+    marginBottom: 16,
+    marginTop: -30, // ✅ moved slightly lower for better reach
   },
 
   backText: {
-    fontSize: 22,
+    fontSize: 26,
     color: "#166534",
   },
 
   headerTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#374151",
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#166534",
   },
 
   progressRow: {
     flexDirection: "row",
     justifyContent: "center",
-    marginTop: 10,
+    marginVertical: 12,
   },
 
   circle: {
@@ -41,15 +42,13 @@ export default StyleSheet.create({
 
   activeCircle: {
     backgroundColor: "#166534",
-    width: 26,
-    borderRadius: 5,
   },
 
   stepTitle: {
     textAlign: "center",
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#111827",
-    marginTop: 14,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+    marginBottom: 8,
   },
 });

@@ -1,6 +1,11 @@
 import { createContext } from "react";
 
 export const MapContext = createContext({
+  activeMapModule: null,
+  setActiveMapModule: () => {
+    throw new Error("setActiveMapModule not provided");
+  },
+
   /* =========================
      PANEL STATE
   ========================= */
@@ -31,7 +36,7 @@ export const MapContext = createContext({
   },
 
   /* =========================
-     EVACUATION PLACES ✅
+     EVACUATION PLACES
   ========================= */
 
   evacPlaces: [],
@@ -64,7 +69,7 @@ export const MapContext = createContext({
   },
 
   /* =========================
-     INCIDENT REPORTS ✅
+     INCIDENT REPORTS
   ========================= */
 
   incidents: [],
@@ -73,7 +78,7 @@ export const MapContext = createContext({
   },
 
   /* =========================
-     ✅ HAZARD TOGGLES (FIX)
+     HAZARD TOGGLES
      SINGLE SOURCE OF TRUTH
   ========================= */
 
@@ -85,5 +90,16 @@ export const MapContext = createContext({
   showEarthquakeHazard: false,
   setShowEarthquakeHazard: () => {
     throw new Error("setShowEarthquakeHazard not provided");
+  },
+
+  /* =========================
+     BOTTOM NAV INTERACTION
+     temporarily disables map drag
+     while user scrolls NewBottomNav
+  ========================= */
+
+  isBottomNavInteracting: false,
+  setIsBottomNavInteracting: () => {
+    throw new Error("setIsBottomNavInteracting not provided");
   },
 });

@@ -1,31 +1,24 @@
 import React, { useContext } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-/* ================= SCREENS ================= */
+/* ================= AUTH SCREENS ================= */
 import GetStarted from "./screens/GetStarted";
 import LogIn from "./screens/LogIn";
 import PrivacyGate from "./screens/PrivacyGate";
-import SignUp from "./screens/SignUp";
+import PrivacySwiper from "./screens/PrivacySwiper";
+import RegisterFlow from "./screens/signup/RegisterFlow";
 import SendOtp from "./screens/SendOtp";
 import VerifyOtp from "./screens/VerifyOtp";
 
-import PasswordSecurity from "./screens/PasswordSecurity";
-import PersonalDetails from "./screens/PersonalDetails";
-
+/* ================= POST-LOGIN APP ================= */
 import AppShell from "./screens/AppShell";
-import MainCenter from "./screens/MainCenter";
-import Map from "./screens/Map";
-import IncidentReportScreen from "./screens/IncidentReportingScreen";
-import Profile from "./screens/Profile";
-import RiskHeatMap from "./screens/RiskHeatMap";
-import Guidelines from "./screens/Guidelines";
-import SafetyMark from "./screens/SafetyMark";
 
 /* ================= PROVIDERS ================= */
 import { UserProvider } from "./screens/UserProvider";
 import { UserContext } from "./screens/UserContext";
-import SearchProvider from "./screens/SearchContext"; // ✅ DEFAULT IMPORT
+import SearchProvider from "./screens/SearchContext";
 
 const Stack = createNativeStackNavigator();
 
@@ -36,7 +29,8 @@ function AuthStack() {
       <Stack.Screen name="GetStarted" component={GetStarted} />
       <Stack.Screen name="LogIn" component={LogIn} />
       <Stack.Screen name="PrivacyGate" component={PrivacyGate} />
-      <Stack.Screen name="SignUp" component={SignUp} />
+      <Stack.Screen name="DataPrivacy" component={PrivacySwiper} />
+      <Stack.Screen name="RegisterFlow" component={RegisterFlow} />
       <Stack.Screen name="SendOtp" component={SendOtp} />
       <Stack.Screen
         name="VerifyOtp"
@@ -59,19 +53,23 @@ function AppStack() {
 /* ================= ROOT SWITCH ================= */
 function RootNavigator() {
   const { user, loading } = useContext(UserContext);
+
   if (loading) return null;
+
   return user ? <AppStack /> : <AuthStack />;
 }
 
 /* ================= APP ROOT ================= */
 export default function App() {
   return (
-    <UserProvider>
-      <SearchProvider>
-        <NavigationContainer>
-          <RootNavigator />
-        </NavigationContainer>
-      </SearchProvider>
-    </UserProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <UserProvider>
+        <SearchProvider>
+          <NavigationContainer>
+            <RootNavigator />
+          </NavigationContainer>
+        </SearchProvider>
+      </UserProvider>
+    </GestureHandlerRootView>
   );
 }

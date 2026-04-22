@@ -5,21 +5,24 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 export default function AppBootstrap({ navigation }) {
   useEffect(() => {
     const boot = async () => {
-      const privacyAccepted = await AsyncStorage.getItem("privacyAccepted");
       const getStartedSeen = await AsyncStorage.getItem("getStartedSeen");
+      const privacyAccepted = await AsyncStorage.getItem("privacyAccepted");
 
-      if (privacyAccepted !== "true") {
-        navigation.replace("PrivacyGate");
-        return;
-      }
-
+      // ✅ First time ever → GetStarted
       if (getStartedSeen !== "true") {
         navigation.replace("GetStarted");
         return;
       }
 
-      // ✅ Already onboarded → start directly on Map
-      navigation.replace("Map");
+      // ✅ Seen GetStarted but has NOT accepted privacy
+      if (privacyAccepted !== "true") {
+        navigation.replace("PrivacyGate");
+        return;
+      }
+
+      // ✅ Privacy already accepted → always go to Login
+      // Registration will start from Login → Sign Up
+      navigation.replace("Login");
     };
 
     boot();

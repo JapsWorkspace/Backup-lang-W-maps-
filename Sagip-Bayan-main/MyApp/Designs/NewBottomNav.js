@@ -1,115 +1,142 @@
-// Designs/NewBottomNav.js
 import { StyleSheet, Platform } from "react-native";
 
 export const COLORS = {
-  BAR_BG: "#F4F4F5", // dirty white
-  ACTIVE: "#16A34A",
-  INACTIVE: "#9CA3AF",
+  CARD: "rgba(255,255,255,0.93)",
+  CARD_PRESSED: "rgba(240,247,243,0.98)",
+  CARD_ACTIVE: "#14532d",
+  BORDER: "rgba(255,255,255,0.72)",
+  BORDER_ACTIVE: "#14532d",
+  TEXT: "#10251b",
+  MUTED: "#5f6f66",
+  TEXT_ACTIVE: "#ffffff",
 };
 
 export const METRICS = {
-  BAR_HEIGHT: 72,
-  FAB_SIZE: 56,
+  CARD_WIDTH: 146,
+  CARD_WIDTH_ACTIVE: 172,
+  CARD_HEIGHT: 78,
+  CARD_HEIGHT_ACTIVE: 92,
+  CARD_GAP: 10,
 };
 
 export default StyleSheet.create({
   safe: {
-    backgroundColor: COLORS.BAR_BG,
-
-    /* ✅ FORCE NAV TO BE ABOVE EVERYTHING */
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    zIndex: 9999,      // iOS + Android
-    elevation: 9999,   // Android
+    zIndex: 99999,
+    elevation: 99999,
+    backgroundColor: "transparent",
   },
 
   root: {
-    backgroundColor: COLORS.BAR_BG,
+    paddingTop: 10,
+    paddingBottom: 10,
+    backgroundColor: "transparent",
   },
 
-  barContainer: {
-    height: METRICS.BAR_HEIGHT,
-    backgroundColor: COLORS.BAR_BG,
+  stackContent: {
+    paddingLeft: 14,
+    paddingRight: 44,
+    alignItems: "center",
   },
 
-  tabRow: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: METRICS.BAR_HEIGHT,
+  cardWrap: {
+    marginRight: METRICS.CARD_GAP,
+    paddingTop: 10,
+  },
+
+  lastCardWrap: {
+    marginRight: 0,
+    paddingTop: 10,
+  },
+
+  moduleCard: {
+    width: METRICS.CARD_WIDTH,
+    minHeight: METRICS.CARD_HEIGHT,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.BORDER,
+    backgroundColor: COLORS.CARD,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-around",
-  },
-
-  tabItem: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  icon: {
-    width: 22,
-    height: 22,
-    marginBottom: 2,
-  },
-
-  label: {
-    fontSize: 11,
-    color: COLORS.INACTIVE,
-  },
-
-  labelActive: {
-    color: COLORS.ACTIVE,
-    fontWeight: "700",
-  },
-
-  fabWrapper: {
-    position: "absolute",
-    top: -METRICS.FAB_SIZE / 2,
-    left: "50%",
-    marginLeft: -METRICS.FAB_SIZE / 2,
-    width: METRICS.FAB_SIZE,
-    height: METRICS.FAB_SIZE,
-    borderRadius: METRICS.FAB_SIZE / 2,
-    backgroundColor: COLORS.ACTIVE,
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 50,
 
     ...Platform.select({
       ios: {
-        shadowColor: COLORS.ACTIVE,
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 6 },
+        shadowColor: "#06291a",
+        shadowOpacity: 0.18,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
       },
       android: {
-        elevation: 15,
+        elevation: 10,
       },
     }),
   },
 
-  fabIcon: {
-    width: 26,
-    height: 26,
-    tintColor: "#fff",
+  moduleCardPressed: {
+    backgroundColor: COLORS.CARD_PRESSED,
+    borderColor: "rgba(20,83,45,0.22)",
   },
 
-  /* ✅ WHITE U‑SHAPE ILLUSION */
-  notchMask: {
-    position: "absolute",
-    top: 0,
-    left: "50%",
-    marginLeft: -50,
-    width: 100,
-    height: 50,
-    backgroundColor: "#FFFFFF",
-    borderBottomLeftRadius: 140,
-    borderBottomRightRadius: 140,
-    zIndex: 10,
+  moduleCardActive: {
+    width: METRICS.CARD_WIDTH_ACTIVE,
+    minHeight: METRICS.CARD_HEIGHT_ACTIVE,
+    backgroundColor: COLORS.CARD_ACTIVE,
+    borderColor: COLORS.BORDER_ACTIVE,
+  },
+
+  lastModuleCard: {
+    marginRight: 0,
+  },
+
+  iconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: "#e7f5ed",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: "#d7eadf",
+  },
+
+  iconBoxActive: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderColor: "rgba(255,255,255,0.28)",
+  },
+
+  labelBox: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  moduleLabel: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.TEXT,
+  },
+
+  moduleLabelActive: {
+    fontSize: 14,
+    color: COLORS.TEXT_ACTIVE,
+  },
+
+  moduleHelper: {
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.MUTED,
+  },
+
+  moduleHelperActive: {
+    color: "rgba(255,255,255,0.82)",
   },
 });

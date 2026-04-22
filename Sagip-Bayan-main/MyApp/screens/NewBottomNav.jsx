@@ -1,118 +1,312 @@
-import React from "react";
-import { View, Pressable, Image, Text, Dimensions } from "react-native";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  Pressable,
+  Text,
+  View,
+  Easing,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRoute, useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
+import { FlatList } from "react-native-gesture-handler";
 
-import styles, { COLORS } from "../Designs/NewBottomNav";
+import styles from "../Designs/NewBottomNav";
+import { MapContext } from "./contexts/MapContext";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const TABS = [
+const MODULES = [
   {
-    key: "Connection",
-    label: "Connection",
-    icon: require("../stores/assets/connection.png"),
+    key: "home",
+    label: "Home",
+    helper: "Overview",
+    icon: "home-outline",
   },
   {
-    key: "IncidentReport",
-    label: "Report",
-    icon: require("../stores/assets/report.png"),
+    key: "incident",
+    label: "Incident",
+    helper: "Report",
+    icon: "warning-outline",
   },
   {
-    key: "Map", // ✅ was MainCenter
-    label: "Map",
-    icon: require("../stores/assets/critical.png"), // reuse same icon
+    key: "flood",
+    label: "Flood Map",
+    helper: "Hazard",
+    icon: "water-outline",
   },
   {
-    key: "Virtual",
-    label: "Virtual",
-    icon: require("../stores/assets/vr.png"),
+    key: "earthquake",
+    label: "Earthquake",
+    helper: "Risk",
+    icon: "pulse-outline",
   },
   {
-    key: "Recent",
-    label: "Recent",
-    icon: require("../stores/assets/history.png"),
+    key: "barangay",
+    label: "Barangay",
+    helper: "Boundary",
+    icon: "map-outline",
+  },
+  {
+    key: "evac",
+    label: "Evac Place",
+    helper: "Routes",
+    icon: "navigate-outline",
   },
 ];
 
-export default function NewBottomNav() {
-  const navigation = useNavigation();
-  const route = useRoute();
-  const active = route.name;
+function DockCard({
+  item,
+  index,
+  total,
+  isActive,
+  onPress,
+}) {
+  const activeAnim = useRef(new Animated.Value(isActive ? 1 : 0)).current;
+  const pressAnim = useRef(new Animated.Value(0)).current;
 
-  const NOTCH_WIDTH = Math.min(130, SCREEN_WIDTH * 0.28);
-  const NOTCH_HEIGHT = 46;
+  useEffect(() => {
+    Animated.spring(activeAnim, {
+      toValue: isActive ? 1 : 0,
+      stiffness: 180,
+      damping: 18,
+      mass: 0.8,
+      useNativeDriver: false,
+    }).start();
+  }, [isActive, activeAnim]);
+
+  const handlePressIn = () => {
+    Animated.timing(pressAnim, {
+      toValue: 1,
+      duration: 140,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.timing(pressAnim, {
+      toValue: 0,
+      duration: 180,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const width = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [146, 172],
+  });
+
+  const minHeight = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [78, 92],
+  });
+
+  const translateY = Animated.add(
+    activeAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0, -8],
+    }),
+    pressAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0, -2],
+    })
+  );
+
+  const scale = pressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.02],
+  });
+
+  const backgroundColor = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["rgba(255,255,255,0.93)", "#14532d"],
+  });
+
+  const borderColor = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["rgba(255,255,255,0.72)", "#14532d"],
+  });
+
+  const iconBg = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#e7f5ed", "rgba(255,255,255,0.18)"],
+  });
+
+  const iconBorder = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#d7eadf", "rgba(255,255,255,0.28)"],
+  });
+
+  const labelColor = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#10251b", "#ffffff"],
+  });
+
+  const helperColor = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#5f6f66", "rgba(255,255,255,0.82)"],
+  });
+
+  const iconColor = isActive ? "#ffffff" : "#14532d";
 
   return (
-    <SafeAreaView edges={["bottom"]} style={styles.safe}>
-      <View style={styles.root}>
-        <View style={styles.barContainer}>
-          <View
+    <Pressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={index === total - 1 ? styles.lastCardWrap : styles.cardWrap}
+    >
+      <Animated.View
+        style={[
+          styles.moduleCard,
+          {
+            width,
+            minHeight,
+            backgroundColor,
+            borderColor,
+            transform: [{ translateY }, { scale }],
+          },
+        ]}
+      >
+        <Animated.View
+          style={[
+            styles.iconBox,
+            {
+              backgroundColor: iconBg,
+              borderColor: iconBorder,
+            },
+          ]}
+        >
+          <Ionicons name={item.icon} size={isActive ? 22 : 20} color={iconColor} />
+        </Animated.View>
+
+        <View style={styles.labelBox}>
+          <Animated.Text
+            numberOfLines={1}
             style={[
-              styles.notchMask,
+              styles.moduleLabel,
               {
-                width: NOTCH_WIDTH,
-                height: NOTCH_HEIGHT,
-                marginLeft: -NOTCH_WIDTH / 2,
+                color: labelColor,
+                fontSize: isActive ? 14 : 13,
               },
             ]}
-          />
+          >
+            {item.label}
+          </Animated.Text>
 
-          <View style={styles.tabRow}>
-            {TABS.map((tab) => {
-              // center slot spacing (kept exactly the same)
-              if (tab.key === "Map") {
-                return <View key={tab.key} style={{ flex: 1 }} />;
-              }
-
-              const isActive = active === tab.key;
-
-              return (
-                <Pressable
-                  key={tab.key}
-                  style={styles.tabItem}
-                  onPress={() =>
-                    navigation.navigate("AppShell", {
-                      screen: tab.key,
-                    })
-                  }
-                >
-                  <Image
-                    source={tab.icon}
-                    style={[
-                      styles.icon,
-                      {
-                        tintColor: isActive
-                          ? COLORS.ACTIVE
-                          : COLORS.INACTIVE,
-                      },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.label,
-                      isActive && styles.labelActive,
-                    ]}
-                  >
-                    {tab.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <Animated.Text
+            numberOfLines={1}
+            style={[
+              styles.moduleHelper,
+              {
+                color: helperColor,
+              },
+            ]}
+          >
+            {item.helper}
+          </Animated.Text>
         </View>
+      </Animated.View>
+    </Pressable>
+  );
+}
 
-        {/* ✅ CENTER FAB NOW OPENS MAP */}
-        <Pressable
-          style={styles.fabWrapper}
-          onPress={() =>
-            navigation.navigate("AppShell", {
-              screen: "Map",
-            })
-          }
-        >
-          <Image source={TABS[2].icon} style={styles.fabIcon} />
-        </Pressable>
+export default function NewBottomNav() {
+  const navigation = useNavigation();
+  const {
+    activeMapModule,
+    setActiveMapModule,
+    setPanelState,
+    setEvac,
+    setRouteRequested,
+    setRoutes,
+    setActiveRoute,
+    setIsBottomNavInteracting,
+  } = useContext(MapContext);
+
+  const [activeDockItem, setActiveDockItem] = useState("home");
+  const moduleData = useMemo(() => MODULES, []);
+
+  if (activeMapModule) return null;
+
+  const goHome = () => {
+    setIsBottomNavInteracting(false);
+    setActiveDockItem("home");
+    setActiveMapModule(null);
+    setPanelState("HIDDEN");
+    setEvac(null);
+    setRouteRequested(false);
+    setRoutes([]);
+    setActiveRoute(null);
+
+    navigation.navigate("AppShell", {
+      screen: "Map",
+    });
+  };
+
+  const openModule = (moduleKey) => {
+    if (moduleKey === "home") {
+      goHome();
+      return;
+    }
+
+    setIsBottomNavInteracting(false);
+    setActiveDockItem(moduleKey);
+    setActiveMapModule(moduleKey);
+    setPanelState(moduleKey === "evac" ? "PLACE_INFO" : "HIDDEN");
+
+    navigation.navigate("AppShell", {
+      screen: "Map",
+      params: { module: moduleKey },
+    });
+  };
+
+  const handleMomentumEnd = (event) => {
+    const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
+    const itemWidth = 156;
+    const index = Math.round(offsetX / itemWidth);
+    const safeIndex = Math.max(0, Math.min(index, moduleData.length - 1));
+    const focused = moduleData[safeIndex];
+
+    if (focused) {
+      setActiveDockItem(focused.key);
+    }
+
+    setIsBottomNavInteracting(false);
+  };
+
+  const renderItem = ({ item, index }) => (
+    <DockCard
+      item={item}
+      index={index}
+      total={moduleData.length}
+      isActive={activeDockItem === item.key}
+      onPress={() => openModule(item.key)}
+    />
+  );
+
+  return (
+    <SafeAreaView edges={["bottom"]} style={styles.safe} pointerEvents="auto">
+      <View style={styles.root} pointerEvents="auto">
+        <FlatList
+          data={moduleData}
+          keyExtractor={(item) => item.key}
+          renderItem={renderItem}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.stackContent}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+          decelerationRate="fast"
+          snapToInterval={156}
+          snapToAlignment="start"
+          onTouchStart={() => setIsBottomNavInteracting(true)}
+          onTouchEnd={() => setIsBottomNavInteracting(false)}
+          onTouchCancel={() => setIsBottomNavInteracting(false)}
+          onScrollBeginDrag={() => setIsBottomNavInteracting(true)}
+          onScrollEndDrag={() => {}}
+          onMomentumScrollEnd={handleMomentumEnd}
+        />
       </View>
     </SafeAreaView>
   );

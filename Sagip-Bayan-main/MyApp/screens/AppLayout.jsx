@@ -37,26 +37,32 @@ function NavigationLegend({ destination }) {
   );
 }
 
-export default function AppLayout({ children }) {
+export default function AppLayout({ children, currentScreen = "Map" }) {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
 
   const { setUser } = useContext(UserContext);
-  const { panelState, evac } = useContext(MapContext);
+  const { panelState, evac, setActiveMapModule } = useContext(MapContext);
 
   const { search, suggestions, clear } = useSearch();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [logoutVisible, setLogoutVisible] = useState(false);
 
-  /* =========================
-     IMPORTANT:
-     ❌ AppLayout MUST NOT mutate panelState
-     ✅ Map.jsx owns navigation lifecycle
-  ========================= */
+  const isTopUiAllowedScreen =
+    currentScreen === "Map" || currentScreen === "MainCenter";
 
-  const showLegend = panelState === "NAVIGATION" && isFocused;
-  const showSearchBar = !showLegend;
+  const showLegend =
+    isTopUiAllowedScreen &&
+    panelState === "NAVIGATION" &&
+    isFocused &&
+    !drawerOpen;
+
+  const showSearchBar =
+    isTopUiAllowedScreen &&
+    panelState !== "NAVIGATION" &&
+    isFocused &&
+    !drawerOpen;
 
   const confirmLogout = async () => {
     setLogoutVisible(false);
@@ -65,10 +71,8 @@ export default function AppLayout({ children }) {
 
   return (
     <View style={styles.root}>
-      {/* ===== MAP SCREEN (children = Map.jsx) ===== */}
       <View style={styles.content}>{children}</View>
 
-      {/* ===== TOP UI ===== */}
       {showLegend ? (
         <View style={styles.topOverlay}>
           <NavigationLegend destination={evac?.name} />
@@ -91,7 +95,6 @@ export default function AppLayout({ children }) {
         )
       )}
 
-      {/* ===== DRAWER ===== */}
       {drawerOpen && (
         <AppDrawer
           onRequestClose={() => setDrawerOpen(false)}
@@ -99,10 +102,15 @@ export default function AppLayout({ children }) {
             setDrawerOpen(false);
             setLogoutVisible(true);
           }}
-          onNavigate={(route, params) => {
+          onNavigate={(routeName, params) => {
             setDrawerOpen(false);
+
+            if (routeName !== "Map" && routeName !== "MainCenter") {
+              setActiveMapModule(null);
+            }
+
             navigation.navigate("AppShell", {
-              screen: route,
+              screen: routeName,
               params,
             });
           }}
@@ -114,9 +122,6 @@ export default function AppLayout({ children }) {
         onCancel={() => setLogoutVisible(false)}
         onConfirm={confirmLogout}
       />
-
-
-  
     </View>
   );
 }

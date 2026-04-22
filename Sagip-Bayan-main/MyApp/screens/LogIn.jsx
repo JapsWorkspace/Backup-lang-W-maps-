@@ -11,8 +11,8 @@ import {
   SafeAreaView,
   ScrollView,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import api from "../lib/api";
 import styles, { COLORS } from "../Designs/LogIn";
 import { UserContext } from "./UserContext";
@@ -21,15 +21,32 @@ export default function LogIn({ navigation }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const { setUser } = useContext(UserContext);
 
-  const sanitizeInput = (text) =>
-    text.replace(/[^a-zA-Z0-9]/g, "");
+  /* ---------------- SANITIZATION ---------------- */
+  const sanitizeUsername = (text) =>
+    text.replace(/[^a-zA-Z0-9]/g, "").trimStart();
 
-  /* ================= LOGIN ================= */
+  /* ---------------- VALIDATION ---------------- */
+  const validate = () => {
+    if (!username) {
+      setError("Username is required.");
+      return false;
+    }
+    if (!password) {
+      setError("Password is required.");
+      return false;
+    }
+    return true;
+  };
+
+  /* ---------------- LOGIN ---------------- */
   const handleLogin = () => {
     setError("");
+
+    if (!validate()) return;
 
     api
       .post("/user/login", { username, password })
@@ -37,17 +54,15 @@ export default function LogIn({ navigation }) {
         const data = res.data;
 
         if (data.twoFactor) {
-          // ✅ Two-factor flow
           navigation.navigate("VerifyOtp", {
             userId: data.userId,
             email: data.email,
           });
           api.post("/user/send-otp", { email: data.email });
         } else {
-          // ✅ Store FULL backend user object (includes avatar)
           setUser({
             ...data.user,
-            id: data.user._id, // normalize ID once
+            id: data.user._id,
           });
 
           navigation.replace("AppShell");
@@ -60,16 +75,10 @@ export default function LogIn({ navigation }) {
       });
   };
 
-  /* ================= NAV ================= */
-  const handleGoToSignup = async () => {
-    try {
-      const accepted = await AsyncStorage.getItem("privacyAccepted");
-      accepted === "true"
-        ? navigation.navigate("SignUp")
-        : navigation.navigate("PrivacyGate");
-    } catch {
-      navigation.navigate("PrivacyGate");
-    }
+  /* ---------------- SIGNUP FLOW ENTRY ---------------- */
+  const handleGoToSignup = () => {
+    // ✅ Sign up ALWAYS starts at DataPrivacy
+    navigation.navigate("DataPrivacy");
   };
 
   return (
@@ -86,18 +95,18 @@ export default function LogIn({ navigation }) {
       >
         <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
           <View style={styles.pageContainer}>
-
-            {/* WHITE LOGO */}
+            {/* LOGO */}
             <Image
               source={require("../stores/assets/sagipbayanlogowhite.png")}
               style={styles.logo}
               resizeMode="contain"
             />
 
-            {/* FULL-WIDTH PANEL */}
+            {/* PANEL */}
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>LOG IN ACCOUNT</Text>
 
+              {/* Username */}
               <TextInput
                 style={styles.input}
                 placeholder="Username"
@@ -105,21 +114,56 @@ export default function LogIn({ navigation }) {
                 value={username}
                 autoCapitalize="none"
                 onChangeText={(t) =>
-                  setUsername(sanitizeInput(t.trimStart()))
+                  setUsername(sanitizeUsername(t))
                 }
               />
 
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor={COLORS.placeholder}
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
+              {/* Password with show / hide */}
+              <View style={{ position: "relative" }}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password"
+                  placeholderTextColor={COLORS.placeholder}
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                <TouchableOpacity
+                  style={{
+                    position: "absolute",
+                    right: 16,
+                    top: 14,
+                  }}
+                  onPress={() => setShowPassword((p) => !p)}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off" : "eye"}
+                    size={22}
+                    color="#6b7280"
+                  />
+                </TouchableOpacity>
+              </View>
 
+              {/* Inline error */}
               {error ? <Text style={styles.error}>{error}</Text> : null}
 
+              {/* Forgot password */}
+              <TouchableOpacity
+                onPress={() => navigation.navigate("SendOtp")}
+              >
+                <Text
+                  style={{
+                    color: "#166534",
+                    fontWeight: "600",
+                    textAlign: "right",
+                    marginBottom: 14,
+                  }}
+                >
+                  Forgot password?
+                </Text>
+              </TouchableOpacity>
+
+              {/* Login button */}
               <TouchableOpacity
                 style={styles.button}
                 onPress={handleLogin}
@@ -127,20 +171,26 @@ export default function LogIn({ navigation }) {
                 <Text style={styles.buttonText}>LOGIN</Text>
               </TouchableOpacity>
 
-              <Text style={styles.helperText}>
-                don’t have an account?
-              </Text>
-
-              <TouchableOpacity
-                style={styles.secondaryButton}
-                onPress={handleGoToSignup}
+              {/* Sign up */}
+              <Text
+                style={{
+                  marginTop: 20,
+                  textAlign: "center",
+                  fontSize: 16,
+                }}
               >
-                <Text style={styles.secondaryButtonText}>
-                  SIGN UP
+                Don&apos;t have an account?{" "}
+                <Text
+                  style={{
+                    color: "#166534",
+                    fontWeight: "700",
+                  }}
+                  onPress={handleGoToSignup}
+                >
+                  Register
                 </Text>
-              </TouchableOpacity>
+              </Text>
             </View>
-
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

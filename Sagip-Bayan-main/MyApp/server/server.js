@@ -136,6 +136,10 @@ app.get("/api/debug-express", (req, res) => {
   });
 });
 
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
+
 // --------------------
 // Serve uploads
 // --------------------

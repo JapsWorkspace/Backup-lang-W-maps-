@@ -1,4 +1,7 @@
-import { Text,
+import React, { useMemo, useState, useEffect } from "react";
+import {
+  View,
+  Text,
   TextInput,
   TouchableOpacity,
   Image,
@@ -6,28 +9,105 @@ import { Text,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+
 import styles from "../../Designs/StepPersonal";
 
 export default function StepPersonal({
-  fName,
-  lName,
-  username,
-  onFNameChange,
-  onLNameChange,
-  onUsernameChange,
-  onNext,
+  fName = "",
+  lName = "",
+  username = "",
+  address = "",
 
-  /* ✅ GEO DEBUG PROPS */
-  geoDebug,
-  onToggleGeoDebug,
+  onFNameChange = () => {},
+  onLNameChange = () => {},
+  onUsernameChange = () => {},
+  onAddressChange = () => {},
+  onNext = () => {},
+
+  onValidChange = () => {},
 }) {
+  /* ================= LOCAL STATE ================= */
+  const [localFName, setLocalFName] = useState(fName);
+  const [localLName, setLocalLName] = useState(lName);
+  const [localUsername, setLocalUsername] = useState(username);
+  const [localAddress, setLocalAddress] = useState(address);
+
+  const [focused, setFocused] = useState({});
+
+  const setFocus = (key, value) =>
+    setFocused((prev) => ({ ...prev, [key]: value }));
+
+  /* ================= SANITIZE ================= */
+  const sanitizeName = (t) => t.replace(/[^a-zA-Z\s]/g, "");
+  const sanitizeUsername = (t) =>
+    t.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase();
+
+  /* ================= SYNC TO PARENT ================= */
+  useEffect(() => onFNameChange(localFName), [localFName]);
+  useEffect(() => onLNameChange(localLName), [localLName]);
+  useEffect(() => onUsernameChange(localUsername), [localUsername]);
+  useEffect(() => onAddressChange(localAddress), [localAddress]);
+
+  /* ================= VALIDATION ================= */
+  const fNameError =
+    localFName.trim().length >= 2
+      ? ""
+      : "First name must be at least 2 characters";
+
+  const lNameError =
+    localLName.trim().length >= 2
+      ? ""
+      : "Last name must be at least 2 characters";
+
+  const usernameError = useMemo(() => {
+    if (!localUsername) return "Username is required";
+    if (!/^[a-zA-Z0-9_]{4,}$/.test(localUsername))
+      return "Username must be 4+ characters (letters, numbers, _)";
+    return "";
+  }, [localUsername]);
+
+  const addressError =
+    localAddress.trim().length >= 5
+      ? ""
+      : "Address must be at least 5 characters";
+
+  const canProceed =
+    !fNameError &&
+    !lNameError &&
+    !usernameError &&
+    !addressError;
+
+  /* ================= SYNC VALID STATE (FIXED) ================= */
+  useEffect(() => {
+    if (typeof onValidChange === "function") {
+      onValidChange(canProceed);
+    }
+  }, [canProceed, onValidChange]);
+
+  /* ================= NEXT ================= */
+  const handleNext = () => {
+    if (!canProceed) return;
+
+    onNext({
+      fName: localFName,
+      lName: localLName,
+      username: localUsername,
+      address: localAddress,
+    });
+  };
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingBottom: 64 },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         <Image
           source={require("../../stores/assets/application1.png")}
           style={styles.image}
@@ -36,45 +116,70 @@ export default function StepPersonal({
 
         <Text style={styles.title}>Personal Information</Text>
 
+        {/* FIRST NAME */}
+        {focused.fName && fNameError ? (
+          <Text style={styles.error}>{fNameError}</Text>
+        ) : null}
         <TextInput
           style={styles.input}
           placeholder="First Name"
-          value={fName}
-          onChangeText={onFNameChange}
+          value={localFName}
+          onFocus={() => setFocus("fName", true)}
+          onBlur={() => setFocus("fName", false)}
+          onChangeText={(t) => setLocalFName(sanitizeName(t))}
         />
 
+        {/* LAST NAME */}
+        {focused.lName && lNameError ? (
+          <Text style={styles.error}>{lNameError}</Text>
+        ) : null}
         <TextInput
           style={styles.input}
           placeholder="Last Name"
-          value={lName}
-          onChangeText={onLNameChange}
+          value={localLName}
+          onFocus={() => setFocus("lName", true)}
+          onBlur={() => setFocus("lName", false)}
+          onChangeText={(t) => setLocalLName(sanitizeName(t))}
         />
 
+        {/* USERNAME */}
+        {focused.username && usernameError ? (
+          <Text style={styles.error}>{usernameError}</Text>
+        ) : null}
         <TextInput
           style={styles.input}
           placeholder="Username"
-          value={username}
-          onChangeText={onUsernameChange}
+          value={localUsername}
           autoCapitalize="none"
+          onFocus={() => setFocus("username", true)}
+          onBlur={() => setFocus("username", false)}
+          onChangeText={(t) =>
+            setLocalUsername(sanitizeUsername(t))
+          }
         />
 
-        {/* ✅ GEO DEBUG TOGGLE */}
-        <TouchableOpacity
-          onPress={onToggleGeoDebug}
-          style={{ marginTop: 12, alignSelf: "center" }}
-        >
-          <Text
-            style={{
-              color: geoDebug ? "#16A34A" : "#DC2626",
-              fontSize: 12,
-              fontWeight: "600",
-            }}
-          >
-            Geo Check: {geoDebug ? "OFF (Debug)" : "ON"}
-          </Text>
-        </TouchableOpacity>
+        {/* ADDRESS */}
+        {focused.address && addressError ? (
+          <Text style={styles.error}>{addressError}</Text>
+        ) : null}
+        <TextInput
+          style={styles.input}
+          placeholder="Address"
+          value={localAddress}
+          onFocus={() => setFocus("address", true)}
+          onBlur={() => setFocus("address", false)}
+          onChangeText={setLocalAddress}
+        />
 
-        <TouchableOpacity style={styles.button} onPress={onNext}>
+        {/* NEXT */}
+        <TouchableOpacity
+          style={[
+            styles.button,
+            !canProceed && { opacity: 0.5 },
+          ]}
+          disabled={!canProceed}
+          onPress={handleNext}
+        >
           <Text style={styles.buttonText}>NEXT</Text>
         </TouchableOpacity>
       </ScrollView>
