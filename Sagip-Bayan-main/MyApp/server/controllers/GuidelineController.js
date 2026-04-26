@@ -70,24 +70,21 @@ const incrementViews = async (req, res) => {
 // ✅ Get all guidelines
 const getGuidelines = async (req, res) => {
   try {
-    const { status, category } = req.query;  // Get query parameters
-    const filter = {};  // Initialize filter object
+    const { status, category } = req.query;
+    const filter = {};
 
-    if (status) filter.status = status;  // Add status filter if provided
-    if (category) filter.category = category;  // Add category filter if provided
+    if (status) filter.status = status;
+    if (category) filter.category = category;
 
-    // Example database query (replace with your actual database code)
-    const guidelines = await PostingGuideline.find(filter);  // Assuming you're using something like MongoDB
+    const guidelines = await PostingGuideline.find(filter).sort({
+      createdAt: -1,
+      updatedAt: -1,
+    });
 
-    if (!guidelines || guidelines.length === 0) {
-      return res.status(404).json({ message: "No guidelines found" });  // Handle no results
-    }
-
-    res.status(200).json(guidelines);  // Return the guidelines data as JSON
-
+    res.status(200).json(guidelines || []);
   } catch (err) {
     console.error("Error fetching guidelines:", err);
-    res.status(500).json({ error: err.message });  // Return error response
+    res.status(500).json({ error: err.message });
   }
 };
 

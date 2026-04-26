@@ -32,7 +32,7 @@ export default StyleSheet.create({
 
   root: {
     paddingTop: 10,
-    paddingBottom: 10,
+    paddingBottom: 12,
     backgroundColor: "transparent",
   },
 

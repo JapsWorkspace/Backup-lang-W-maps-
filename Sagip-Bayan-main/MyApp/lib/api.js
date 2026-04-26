@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const LAN_IP = '192.168.1.208';
+const LAN_IP = '192.168.1.87';
 const NGROK_URL = ''; // e.g. 'https://xxxx.ngrok.app'
 const PORT = 8000;
 const HEALTH_PATH = '/health';
@@ -65,14 +65,17 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     const url = (err?.config?.baseURL || '') + (err?.config?.url || '');
+    const status = err?.response?.status;
 
-    console.log('[api] error:', {
-      url,
-      method: err?.config?.method,
-      message: err?.message,
-      status: err?.response?.status,
-      data: err?.response?.data,
-    });
+    if (!status || status >= 500) {
+      console.log('[api] error:', {
+        url,
+        method: err?.config?.method,
+        message: err?.message,
+        status,
+        data: err?.response?.data,
+      });
+    }
 
     return Promise.reject(err);
   }

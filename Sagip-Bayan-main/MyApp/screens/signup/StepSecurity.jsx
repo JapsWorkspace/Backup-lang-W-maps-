@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 
 import styles from "../../Designs/StepSecurity";
+import { getPasswordError } from "../utils/validation";
 
 export default function StepSecurity({
   password: initialPassword = "",
@@ -43,8 +44,8 @@ export default function StepSecurity({
   const [showConfirm, setShowConfirm] = useState(false);
 
   /* ================= CLEAN VALUES ================= */
-  const cleanPassword = password.replace(/\s/g, "");
-  const cleanConfirm = confirmPassword.replace(/\s/g, "");
+  const cleanPassword = password.trim();
+  const cleanConfirm = confirmPassword.trim();
 
   /* ================= SYNC TO PARENT ================= */
   useEffect(() => {
@@ -57,21 +58,13 @@ export default function StepSecurity({
 
   /* ================= VALIDATION ================= */
   const passwordError = useMemo(() => {
-    if (!cleanPassword) return "Password is required";
-
-    if (cleanPassword.length < 8)
-      return "Must be at least 8 characters";
-
-    if (!/[A-Za-z]/.test(cleanPassword) || !/[0-9]/.test(cleanPassword))
-      return "Must include letters and numbers";
-
-    return "";
+    return getPasswordError(cleanPassword);
   }, [cleanPassword]);
 
   const confirmError = useMemo(() => {
     if (!cleanConfirm) return "";
     if (cleanConfirm !== cleanPassword)
-      return "Passwords do not match";
+      return "Passwords do not match.";
     return "";
   }, [cleanConfirm, cleanPassword]);
 
@@ -140,6 +133,8 @@ export default function StepSecurity({
             onFocus={() => setFocus("password", true)}
             onBlur={() => setFocus("password", false)}
             onChangeText={setPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
           />
 
           <TouchableOpacity
@@ -168,6 +163,8 @@ export default function StepSecurity({
             onFocus={() => setFocus("confirm", true)}
             onBlur={() => setFocus("confirm", false)}
             onChangeText={setConfirmPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
           />
 
           <TouchableOpacity

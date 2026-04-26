@@ -10,9 +10,12 @@ import {
   Keyboard,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { sanitizeSearchText, safeDisplayText } from "../utils/validation";
 
 export default function AppTopBar({
   onMenuPress,
+  onNotificationPress,
+  notificationCount = 0,
   onSearchChange,
   showSearch,
   suggestions = [],
@@ -22,8 +25,9 @@ export default function AppTopBar({
   const [value, setValue] = useState("");
 
   const handleChangeText = (text) => {
-    setValue(text);
-    onSearchChange?.(text);
+    const cleanText = sanitizeSearchText(text);
+    setValue(cleanText);
+    onSearchChange?.(cleanText);
   };
 
   /**
@@ -74,8 +78,19 @@ export default function AppTopBar({
           </View>
         )}
 
-        <TouchableOpacity style={styles.profileButton}>
-          <Ionicons name="person-circle-outline" size={25} color="#10251b" />
+        <TouchableOpacity
+          style={styles.notificationButton}
+          activeOpacity={0.82}
+          onPress={onNotificationPress}
+        >
+          <Ionicons name="notifications-outline" size={22} color="#10251b" />
+          {notificationCount > 0 && (
+            <View style={styles.notificationDot}>
+              <Text style={styles.notificationCount}>
+                {notificationCount > 9 ? "9+" : notificationCount}
+              </Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -95,7 +110,9 @@ export default function AppTopBar({
                 style={styles.item}
                 onPress={() => handleSelect(item)}
               >
-                <Text numberOfLines={2}>{item.label}</Text>
+                <Text numberOfLines={2}>
+                  {safeDisplayText(item?.label, "Unnamed place")}
+                </Text>
 
                 {item.source === "evacuation" && (
                   <Text style={styles.badge}>EVAC CENTER</Text>
@@ -112,11 +129,11 @@ export default function AppTopBar({
 const styles = StyleSheet.create({
   wrapper: {
     position: "absolute",
-    top: Platform.OS === "ios" ? 55 : 25,
+    top: Platform.OS === "ios" ? 76 : 46,
     left: 16,
     right: 16,
-    zIndex: 2000,
-    elevation: 2000,
+    zIndex: 6000,
+    elevation: 6000,
     pointerEvents: "box-none",
   },
 
@@ -139,7 +156,7 @@ const styles = StyleSheet.create({
     elevation: 7,
   },
 
-  profileButton: {
+  notificationButton: {
     width: 44,
     height: 44,
     borderRadius: 16,
@@ -149,6 +166,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.72)",
     elevation: 7,
+  },
+
+  notificationDot: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#facc15",
+    borderWidth: 1,
+    borderColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+
+  notificationCount: {
+    color: "#10251b",
+    fontSize: 9,
+    fontWeight: "900",
   },
 
   searchWrap: {

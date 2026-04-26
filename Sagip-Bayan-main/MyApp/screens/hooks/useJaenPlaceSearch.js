@@ -2,6 +2,11 @@ import { useState, useRef, useContext } from "react";
 import axios from "axios";
 import api from "../../lib/api";
 import { MapContext } from "../contexts/MapContext";
+import {
+  isValidCoordinate,
+  sanitizeSearchText,
+  safeDisplayText,
+} from "../utils/validation";
 
 /* ✅ JAEN, NUEVA ECIJA — MUNICIPALITY‑WIDE BOUNDS */
 const JAEN_BOUNDS = {
@@ -12,6 +17,7 @@ const JAEN_BOUNDS = {
 };
 
 function isInsideJaenCoords(lat, lon) {
+  if (!isValidCoordinate(lat, lon)) return false;
   return (
     lat >= JAEN_BOUNDS.south &&
     lat <= JAEN_BOUNDS.north &&
@@ -66,7 +72,13 @@ export default function useJaenPlaceSearch() {
   const performSearch = async (value) => {
     await loadEvacPlaces();
 
-    const q = value.toLowerCase();
+    const cleanValue = sanitizeSearchText(value);
+    if (cleanValue.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+
+    const q = cleanValue.toLowerCase();
 
     /* ✅ 1️⃣ EVACUATION CENTERS FIRST */
     const evacMatches = evacCache.current
@@ -82,12 +94,13 @@ export default function useJaenPlaceSearch() {
       )
       .map((p) => ({
         id: p._id,
-        label: p.name,
-        latitude: p.latitude,
-        longitude: p.longitude,
+        label: safeDisplayText(p?.name, "Evacuation center"),
+        latitude: Number(p.latitude),
+        longitude: Number(p.longitude),
         source: "evacuation",
         raw: p,
-      }));
+      }))
+      .filter((p) => isValidCoordinate(p.latitude, p.longitude));
 
     let results = [...evacMatches];
 
@@ -98,7 +111,7 @@ export default function useJaenPlaceSearch() {
           "https://nominatim.openstreetmap.org/search",
           {
             params: {
-              q: value,
+              q: cleanValue,
               format: "json",
               countrycodes: "ph",
               bounded: 1,
@@ -118,7 +131,7 @@ export default function useJaenPlaceSearch() {
           )
           .map((p, idx) => ({
             id: p.place_id || `map-${p.lat}-${p.lon}-${idx}`,
-            label: p.display_name,
+            label: safeDisplayText(p.display_name, "Selected location"),
             latitude: Number(p.lat),
             longitude: Number(p.lon),
             source: "map",
@@ -140,9 +153,10 @@ export default function useJaenPlaceSearch() {
 
   /* ---------- PUBLIC API ---------- */
   const search = (value) => {
-    setQuery(value);
+    const cleanValue = sanitizeSearchText(value);
+    setQuery(cleanValue);
 
-    if (!value || value.length < 3) {
+    if (!cleanValue || cleanValue.length < 3) {
       setSuggestions([]);
       return;
     }
@@ -152,7 +166,7 @@ export default function useJaenPlaceSearch() {
     }
 
     debounceRef.current = setTimeout(() => {
-      performSearch(value);
+      performSearch(cleanValue);
     }, 500);
   };
 

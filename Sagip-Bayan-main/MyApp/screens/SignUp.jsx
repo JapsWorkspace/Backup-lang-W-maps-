@@ -1,31 +1,30 @@
-// screens/SignUp.jsx
-
 import { useState, useEffect } from "react";
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-} from "react-native";
+import { Alert, KeyboardAvoidingView, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
-import api from "../lib/api";
 
+import api from "../lib/api";
 import StepPersonal from "./signup/StepPersonal";
 import StepSecurity from "./signup/StepSecurity";
 import StepMobile from "./signup/StepMobile";
 import SignUpHeader from "./signup/SignUpHeader";
-
-/* ================= CONSTANTS ================= */
+import {
+  ADDRESS_MAX_LENGTH,
+  getPasswordError,
+  getPhoneError,
+  getUsernameError,
+  isValidCoordinate,
+  isValidGmail,
+  normalizeEmail,
+  sanitizePhoneLocal,
+  sanitizeTextInput,
+} from "./utils/validation";
 
 const JAEN_CENTER = { lat: 15.3383, lng: 120.9141 };
 const MAX_DISTANCE_KM = 5;
 
-/* ================= COMPONENT ================= */
-
 export default function SignUp({ navigation }) {
   const [step, setStep] = useState(0);
-
-  /* ===== FORM DATA ===== */
   const [fName, setFName] = useState("");
   const [lName, setLName] = useState("");
   const [username, setUsername] = useState("");
@@ -35,64 +34,110 @@ export default function SignUp({ navigation }) {
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [birthdate, setBirthdate] = useState("");
-
-  /* ===== GEO DEBUG (✅ PERSISTS ACROSS STEPS) ===== */
   const [geoDebug, setGeoDebug] = useState(false);
-
-  /* ===== LOCATION ===== */
   const [location, setLocation] = useState(null);
   const [permission, setPermission] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  /* ================= HELPERS ================= */
-
-  const toRad = (v) => (v * Math.PI) / 180;
-  const getDistanceKm = (a, b) => {
-    const R = 6371;
-    const dLat = toRad(b.lat - a.lat);
-    const dLng = toRad(b.lng - a.lng);
+  const toRad = (value) => (value * Math.PI) / 180;
+  const getDistanceKm = (from, to) => {
+    const radiusKm = 6371;
+    const dLat = toRad(to.lat - from.lat);
+    const dLng = toRad(to.lng - from.lng);
     const x =
       Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(a.lat)) *
-        Math.cos(toRad(b.lat)) *
+      Math.cos(toRad(from.lat)) *
+        Math.cos(toRad(to.lat)) *
         Math.sin(dLng / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+
+    return radiusKm * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   };
 
-  /* ================= LOCATION ================= */
-
   useEffect(() => {
-    (async () => {
-      const { status } =
-        await Location.requestForegroundPermissionsAsync();
-      setPermission(status);
+    let mounted = true;
 
-      if (status === "granted") {
-        const pos = await Location.getCurrentPositionAsync({});
-        setLocation({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        });
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (!mounted) return;
+        setPermission(status);
+
+        if (status === "granted") {
+          const pos = await Location.getCurrentPositionAsync({});
+          if (!mounted) return;
+
+          const nextLocation =
+            isValidCoordinate(pos?.coords?.latitude, pos?.coords?.longitude)
+              ? {
+                  lat: Number(pos.coords.latitude),
+                  lng: Number(pos.coords.longitude),
+                }
+              : null;
+
+          setLocation(nextLocation);
+        }
+      } catch {
+        if (mounted) {
+          setPermission("denied");
+          setLocation(null);
+        }
       }
     })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  /* ================= NAV ================= */
-
-  const next = () => setStep((s) => s + 1);
+  const next = () => setStep((value) => value + 1);
   const back = () =>
-    step === 0 ? navigation.goBack() : setStep((s) => s - 1);
-
-  /* ================= FINAL SUBMIT ================= */
+    step === 0 ? navigation.goBack() : setStep((value) => value - 1);
 
   const submit = async () => {
-    // ✅ Location check ONLY if debug OFF
+    const payload = {
+      fname: sanitizeTextInput(fName, { maxLength: 50 }),
+      lname: sanitizeTextInput(lName, { maxLength: 50 }),
+      username,
+      password,
+      birthdate: sanitizeTextInput(birthdate, { maxLength: 40 }),
+      phone: sanitizePhoneLocal(phone),
+      email: normalizeEmail(email),
+      address: sanitizeTextInput(address, { maxLength: ADDRESS_MAX_LENGTH }),
+      location:
+        location && isValidCoordinate(location.lat, location.lng)
+          ? {
+              lat: Number(location.lat),
+              lng: Number(location.lng),
+            }
+          : null,
+    };
+
+    if (
+      !payload.fname ||
+      !payload.lname ||
+      getUsernameError(payload.username) ||
+      getPasswordError(payload.password) ||
+      getPhoneError(payload.phone) ||
+      !isValidGmail(payload.email) ||
+      payload.address.length < 5
+    ) {
+      Alert.alert(
+        "Incomplete Details",
+        "Please review your registration details before submitting."
+      );
+      return;
+    }
+
     if (!geoDebug) {
-      if (permission !== "granted" || !location) {
-        Alert.alert("Location Required");
+      if (permission !== "granted" || !payload.location) {
+        Alert.alert(
+          "Location Required",
+          "Allow location access and stay within Jaen to register."
+        );
         return;
       }
 
-      const dist = getDistanceKm(location, JAEN_CENTER);
+      const dist = getDistanceKm(payload.location, JAEN_CENTER);
       if (dist > MAX_DISTANCE_KM) {
         Alert.alert(
           "Outside Service Area",
@@ -102,27 +147,22 @@ export default function SignUp({ navigation }) {
       }
     }
 
-    try {
-      await api.post("/user/register", {
-        fname: fName,
-        lname: lName,
-        username,
-        password,
-        birthdate,
-        phone,
-        email,
-        address,
-        location,
-      });
+    if (isSubmitting) return;
 
+    try {
+      setIsSubmitting(true);
+      await api.post("/user/register", payload);
       Alert.alert("Success", "Check your email to verify.");
       navigation.replace("LogIn");
-    } catch {
-      Alert.alert("Signup failed");
+    } catch (err) {
+      Alert.alert(
+        "Signup failed",
+        err?.response?.data?.message || "Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   };
-
-  /* ================= STEPS ================= */
 
   const pages = [
     <StepPersonal
@@ -130,14 +170,13 @@ export default function SignUp({ navigation }) {
       fName={fName}
       lName={lName}
       username={username}
+      address={address}
       onFNameChange={setFName}
       onLNameChange={setLName}
       onUsernameChange={setUsername}
-      geoDebug={geoDebug}
-      onToggleGeoDebug={() => setGeoDebug((v) => !v)}
+      onAddressChange={setAddress}
       onNext={next}
     />,
-
     <StepSecurity
       key="security"
       password={password}
@@ -147,7 +186,6 @@ export default function SignUp({ navigation }) {
       onNext={next}
       onBack={back}
     />,
-
     <StepMobile
       key="mobile"
       phone={phone}
@@ -160,10 +198,11 @@ export default function SignUp({ navigation }) {
       onBirthdateChange={setBirthdate}
       onSubmit={submit}
       onBack={back}
+      isSubmitting={isSubmitting}
+      geoDebug={geoDebug}
+      onToggleGeoDebug={() => setGeoDebug((value) => !value)}
     />,
   ];
-
-  /* ================= RENDER ================= */
 
   return (
     <SafeAreaView style={{ flex: 1 }}>

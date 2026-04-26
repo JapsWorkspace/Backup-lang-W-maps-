@@ -43,6 +43,42 @@ const userSchema = new mongoose.Schema({
       default: null,
     },
 
+    actorUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    actorName: {
+      type: String,
+      default: "",
+    },
+
+    actorUsername: {
+      type: String,
+      default: "",
+    },
+
+    actorAvatar: {
+      type: String,
+      default: "",
+    },
+
+    connectionCode: {
+      type: String,
+      default: "",
+    },
+
+    actionable: {
+      type: Boolean,
+      default: false,
+    },
+
+    handledAt: {
+      type: Date,
+      default: null,
+    },
+
     read: {
       type: Boolean,
       default: false,

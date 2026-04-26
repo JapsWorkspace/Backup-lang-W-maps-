@@ -2,6 +2,11 @@
 import { useState } from "react";
 import { TextInput, View, Text, Button } from "react-native";
 import api from "../lib/api";
+import {
+  isValidEmail,
+  normalizeEmail,
+  sanitizeEmailInput,
+} from "./utils/validation";
 
 export default function SendOtp({ navigation }) {
   const [email, setEmail] = useState("");
@@ -9,16 +14,16 @@ export default function SendOtp({ navigation }) {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleEmail = (Text) => {
-    setEmail(Text);
+  const handleEmail = (text) => {
+    const rawEmail = sanitizeEmailInput(text);
+    const cleanEmail = normalizeEmail(rawEmail);
+    setEmail(rawEmail);
     setMessage("");
 
-    if (Text.length === 0) {
-      setEmailError("Email is required");
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(Text)) {
-      setEmailError("Email is not valid");
-    } else if (Text.includes(" ")) {
-      setEmailError("Email must not contain spaces");
+    if (!rawEmail) {
+      setEmailError("Email is required.");
+    } else if (!isValidEmail(cleanEmail)) {
+      setEmailError("Enter a valid email address.");
     } else {
       setEmailError("");
     }
@@ -26,7 +31,7 @@ export default function SendOtp({ navigation }) {
 
   const handleEnter = () => {
     if (!email || emailError) {
-      setMessage("Please enter a valid email");
+      setMessage("Please enter a valid email.");
       return;
     }
 
@@ -34,11 +39,10 @@ export default function SendOtp({ navigation }) {
     setMessage("");
 
     api
-      .post("/user/send-otp", { email })
+      .post("/user/send-otp", { email: normalizeEmail(email) })
       .then((response) => {
         setMessage(response.data.message);
-        console.log("OTP sent to:", email);
-        navigation.navigate("VerifyOtp", { email });
+        navigation.navigate("VerifyOtp", { email: normalizeEmail(email) });
       })
       .catch((error) => {
         setMessage(error.response?.data?.message || "Server error");

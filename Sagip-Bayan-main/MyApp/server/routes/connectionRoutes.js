@@ -27,12 +27,6 @@ router.get("/:connectionId", connectionController.getConnectionById);
    SAFETY STATUS
 ========================= */
 
-router.get("/:connectionId", connectionController.getConnectionById);
-
-/* =========================
-   SAFETY STATUS
-========================= */
-
 router.put("/safe/:id", connectionController.markSafe);
 router.put("/not-safe/:id", connectionController.markNotSafe);
 

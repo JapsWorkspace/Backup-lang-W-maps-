@@ -28,7 +28,7 @@ export default function GetStarted({ navigation, route }) {
       toValue: max,
       duration: 200,
       easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
+      useNativeDriver: false,
     }).start(() => {
       navigation.navigate(nextRoute);
       knobX.setValue(0);
@@ -51,7 +51,7 @@ export default function GetStarted({ navigation, route }) {
           ? completeSwipe()
           : Animated.spring(knobX, {
               toValue: 0,
-              useNativeDriver: true,
+              useNativeDriver: false,
               bounciness: 6,
             }).start();
       },

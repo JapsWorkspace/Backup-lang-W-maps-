@@ -1,25 +1,23 @@
 import React from "react";
 import { Marker } from "react-native-maps";
+import { normalizeCoordinate } from "../utils/validation";
 
 export default function RouteMarkers({ start, destination }) {
+  const startCoordinate = normalizeCoordinate(start);
+  const destinationCoordinate = normalizeCoordinate(destination);
+
   return (
     <>
-      {start && (
+      {startCoordinate && (
         <Marker
-          coordinate={{
-            latitude: start.lat,
-            longitude: start.lng,
-          }}
+          coordinate={startCoordinate}
           title="Your location"
         />
       )}
 
-      {destination && (
+      {destinationCoordinate && (
         <Marker
-          coordinate={{
-            latitude: destination.lat,
-            longitude: destination.lng,
-          }}
+          coordinate={destinationCoordinate}
           title="Destination"
           pinColor="green"
         />

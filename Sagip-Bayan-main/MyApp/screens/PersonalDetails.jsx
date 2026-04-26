@@ -7,53 +7,67 @@ import {
   TouchableOpacity,
   Platform,
   KeyboardAvoidingView,
+  ScrollView,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
-import NewBottomNav from "./NewBottomNav";
-
-// ✅ import separated design (same theme as others)
 import styles, { COLORS } from "../Designs/PersonalDetails";
+import {
+  getPhoneError,
+  getUsernameError,
+  safeDisplayText,
+  sanitizePhoneLocal,
+  sanitizeUsername,
+} from "./utils/validation";
 
 export default function PersonalDetails({ navigation }) {
   const { user, setUser } = useContext(UserContext);
   const [username, setUsername] = useState(user?.username || "");
   const [phone, setPhone] = useState(user?.phone || "");
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   if (!user) return <Text>No user logged in</Text>;
 
-  // --- keep your function unchanged (only UI moved to new styles) ---
   const saveUsername = () => {
-    console.log(user);
-    setError(""); // reset previous error
-    if (!username.trim()) {
-      setError("Username cannot be empty.");
+    setError("");
+    const cleanUsername = sanitizeUsername(username);
+    const usernameError = getUsernameError(cleanUsername);
+    if (usernameError) {
+      setError(usernameError);
       return;
     }
 
-    if (!phone.trim()) {
-      setError("Phone number cannot be empty.");
+    const cleanPhone = sanitizePhoneLocal(phone);
+    const phoneError = getPhoneError(cleanPhone);
+    if (phoneError) {
+      setError(phoneError);
       return;
     }
 
-    if (!phone.trim()) {
-      setError("Phone number cannot be empty.");
-      return;
-    }
+    if (isSaving) return;
+    setIsSaving(true);
 
     api
-      .put(`/user/update/${user.id}`, { username, phone })
-      .then(() => {
-        setUser({ ...user, username });
-        setUser({ ...user,  phone });
-        
-        console.log("Username and phone number updated successfully");
+      .put(`/user/update/${user.id}`, {
+        username: cleanUsername,
+        phoneNumber: cleanPhone,
       })
-      .catch((error) => {
-        console.log(user.id);
-        console.error(error);
+      .then(() => {
+        setUser({
+          ...user,
+          username: cleanUsername,
+          phone: cleanPhone,
+          phoneNumber: cleanPhone,
+        });
+      })
+      .catch((updateError) => {
+        console.error(updateError);
         setError("Failed to update username or phone number.");
+      })
+      .finally(() => {
+        setIsSaving(false);
       });
   };
 
@@ -63,96 +77,99 @@ export default function PersonalDetails({ navigation }) {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
     >
-      <View style={styles.phone}>
-        {/* ---------- Header with Back (same as Profile/PasswordSecurity) ---------- */}
+      <ScrollView
+        style={styles.phone}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.headerRow}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <View style={styles.backGlyph} />
+            <Ionicons name="chevron-back" size={22} color={COLORS.green} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Personal Details</Text>
+          <View style={styles.headerCopy}>
+            <Text style={styles.headerTitle}>Personal Details</Text>
+            <Text style={styles.subText}>Keep contact details accurate for alerts and recovery.</Text>
+          </View>
         </View>
-        <Text style={styles.subText}>
-          Review and manage your personal information below. Keeping your details accurate
-          ensures smoother communication, secure account recovery, and a more personalized
-          experience across the app.
-        </Text>
 
-        {/* ---------- Form ---------- */}
-        <View style={styles.formWrapper}>
-          {/* First Name (read-only) */}
-          <Text style={styles.label}>First Name</Text>
-          <TextInput
-            style={[styles.input, styles.inputDisabled]}
-            value={user.fname}
-            editable={false}
-            placeholder="First Name"
-            placeholderTextColor={COLORS.placeholder}
-          />
+        <View style={styles.summaryCard}>
+          <View style={styles.summaryIcon}>
+            <Ionicons name="id-card-outline" size={23} color={COLORS.green} />
+          </View>
+          <View style={styles.summaryCopy}>
+            <Text style={styles.summaryTitle}>
+              {user.fname} {user.lname}
+            </Text>
+            <Text style={styles.summaryMeta}>{user.email}</Text>
+          </View>
+        </View>
 
-          {/* Last Name (read-only) */}
-          <Text style={styles.label}>Last Name</Text>
-          <TextInput
-            style={[styles.input, styles.inputDisabled]}
-            value={user.lname}
-            editable={false}
-            placeholder="Last Name"
-            placeholderTextColor={COLORS.placeholder}
-          />
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Identity</Text>
+          <Field label="First Name" value={user.fname} editable={false} />
+          <Field label="Last Name" value={user.lname} editable={false} />
+          <Field label="Email" value={user.email} editable={false} />
+        </View>
 
-          {/* Username (editable) */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Editable details</Text>
           <Text style={styles.label}>Username</Text>
-          <Text style={styles.helper}>
-            This is your unique identifier. You can update this here.
-          </Text>
+          <Text style={styles.helper}>Used as your resident identifier inside Sagip Bayan.</Text>
           <TextInput
             style={styles.input}
             value={username}
-            editable={true}
             onChangeText={(text) => {
-              setUsername(text);
-              if (error) setError(""); // clear error when typing
+              setUsername(sanitizeUsername(text));
+              if (error) setError("");
             }}
             placeholder="Username"
             placeholderTextColor={COLORS.placeholder}
-          />
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-
-          {/* Email (read-only) */}
-          <Text style={styles.label}>Email</Text>
-          <Text style={styles.helper}>This is the email linked to your account.</Text>
-          <TextInput
-            style={[styles.input, styles.inputDisabled]}
-            value={user.email}
-            editable={false}
-            placeholder="Email"
-            placeholderTextColor={COLORS.placeholder}
+            autoCapitalize="none"
+            autoCorrect={false}
           />
 
           <Text style={styles.label}>Phone Number</Text>
-          <Text style={styles.helper}>This is the phone number linked to your account.</Text>
+          <Text style={styles.helper}>Used for urgent messages and account recovery.</Text>
           <TextInput
             style={styles.input}
             value={phone}
-             onChangeText={(text) => {
-              setPhone(text);
-              if (error) setError(""); // clear error when typing
+            onChangeText={(text) => {
+              setPhone(sanitizePhoneLocal(text));
+              if (error) setError("");
             }}
-            editable={true}
+            editable
+            keyboardType="phone-pad"
             placeholder="Phone Number"
             placeholderTextColor={COLORS.placeholder}
+            maxLength={10}
           />
 
-          {/* Save button */}
-          <TouchableOpacity style={styles.button} onPress={saveUsername}>
-            <Text style={styles.buttonText}>Save Changes</Text>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <TouchableOpacity
+            style={styles.button}
+            onPress={saveUsername}
+            disabled={isSaving}
+          >
+            <Text style={styles.buttonText}>
+              {isSaving ? "Saving..." : "Save Changes"}
+            </Text>
           </TouchableOpacity>
         </View>
-
-        {/* ---------- Bottom Nav ---------- */}
-        <View style={styles.bottomNavWrapper}>
-          <NewBottomNav navigation={navigation} onCenterPress={() => navigation.navigate("MainCenter")} />
-        </View>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function Field({ label, value, editable }) {
+  return (
+    <View style={styles.readOnlyField}>
+      <Text style={styles.readOnlyLabel}>{label}</Text>
+      <Text style={styles.readOnlyValue} numberOfLines={1}>
+        {safeDisplayText(value, "Not set")}
+      </Text>
+      {!editable && <Ionicons name="lock-closed-outline" size={15} color="#94A3B8" />}
+    </View>
   );
 }

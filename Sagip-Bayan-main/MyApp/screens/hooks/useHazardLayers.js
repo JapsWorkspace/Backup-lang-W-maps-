@@ -13,7 +13,7 @@ import safeData from "../data/Safe.json";
    STYLES
 ========================= */
 
-const floodStyles = {
+export const FLOOD_STYLES = {
   susceptible: {
     strokeColor: "rgba(75, 0, 130, 1)",
     fillColor: "rgba(75, 0, 130, 0.5)",
@@ -89,9 +89,9 @@ export default function useHazardLayers({
 
     return (
       <>
-        {renderPolygons(susceptibleData, floodStyles.susceptible)}
-        {renderPolygons(mediumData, floodStyles.medium)}
-        {renderPolygons(safeData, floodStyles.safe)}
+        {renderPolygons(susceptibleData, FLOOD_STYLES.susceptible)}
+        {renderPolygons(mediumData, FLOOD_STYLES.medium)}
+        {renderPolygons(safeData, FLOOD_STYLES.safe)}
       </>
     );
   }, [showFloodMap]);

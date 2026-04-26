@@ -8,9 +8,16 @@ import {
   ScrollView,
   Platform,
 } from "react-native";
-
 import { useMemo, useState, useCallback } from "react";
+
 import styles from "../../Designs/StepMobile";
+import {
+  getPhoneError,
+  isValidGmail,
+  normalizeEmail,
+  sanitizeEmailInput,
+  sanitizePhoneLocal,
+} from "../utils/validation";
 
 export default function StepMobile({
   phone = "",
@@ -21,50 +28,32 @@ export default function StepMobile({
   onEmailChange = () => {},
   onBack,
   onSubmit,
+  isSubmitting = false,
 }) {
   const [submitError, setSubmitError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  /* ================= PHONE VALIDATION ================= */
-  const phoneErrorLocal = useMemo(() => {
-    const cleaned = phone.replace(/[^0-9]/g, "");
+  const phoneErrorLocal = useMemo(() => getPhoneError(phone), [phone]);
 
-    if (!cleaned) return "Phone number is required";
-
-    const valid = /^9\d{9}$/.test(cleaned);
-
-    return valid
-      ? ""
-      : "Must be 10 digits starting with 9 (e.g. 9171234567)";
-  }, [phone]);
-
-  /* ================= EMAIL VALIDATION ================= */
   const emailErrorLocal = useMemo(() => {
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = normalizeEmail(email);
 
-    if (!cleanEmail) return "Email is required";
-
-    const valid = /^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(cleanEmail);
-
-    return valid ? "" : "Only Gmail accounts are allowed (@gmail.com)";
+    if (!cleanEmail) return "Email is required.";
+    return isValidGmail(cleanEmail)
+      ? ""
+      : "Use a valid Gmail address ending in @gmail.com.";
   }, [email]);
 
-  /* ================= CAN SUBMIT ================= */
   const canSubmit =
-    phone &&
-    email &&
+    Boolean(phone) &&
+    Boolean(email) &&
     !phoneErrorLocal &&
     !emailErrorLocal &&
     !isSubmitting;
 
-  /* ================= HANDLERS ================= */
-
   const handlePhoneChange = useCallback(
     (text) => {
       setSubmitError("");
-
-      const cleaned = text.replace(/[^0-9]/g, "").slice(0, 10);
-      onPhoneChange(cleaned);
+      onPhoneChange(sanitizePhoneLocal(text));
     },
     [onPhoneChange]
   );
@@ -72,12 +61,11 @@ export default function StepMobile({
   const handleEmailChange = useCallback(
     (text) => {
       setSubmitError("");
-      onEmailChange(text.trim().toLowerCase());
+      onEmailChange(sanitizeEmailInput(text));
     },
     [onEmailChange]
   );
 
-  /* ================= SUBMIT ================= */
   const handleSubmit = async () => {
     if (!canSubmit) {
       setSubmitError("Please complete all fields correctly.");
@@ -86,36 +74,29 @@ export default function StepMobile({
 
     if (!onSubmit) return;
 
-    setIsSubmitting(true);
     setSubmitError("");
 
     try {
       await onSubmit({
-        phone: `63${phone.replace(/[^0-9]/g, "")}`,
-        email: email.trim().toLowerCase(),
+        phone: `63${sanitizePhoneLocal(phone)}`,
+        email: normalizeEmail(email),
       });
     } catch (err) {
-      console.log("❌ RAW REGISTER ERROR:", err);
-
       const message =
         err?.message ||
         err?.response?.data?.message ||
-        "Registration failed";
-
+        "Registration failed.";
       const lower = message.toLowerCase();
 
-      // 🔥 SMART FRONTEND ERROR DISPLAY (THIS IS WHAT YOU WANTED)
       if (lower.includes("email")) {
-        setSubmitError("❌ This email is already registered.");
+        setSubmitError("This email is already registered.");
       } else if (lower.includes("phone")) {
-        setSubmitError("❌ This phone number is already registered.");
+        setSubmitError("This phone number is already registered.");
       } else if (lower.includes("username")) {
-        setSubmitError("❌ This username is already taken.");
+        setSubmitError("This username is already taken.");
       } else {
-        setSubmitError("❌ Registration failed. Please try again.");
+        setSubmitError("Registration failed. Please try again.");
       }
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -133,7 +114,6 @@ export default function StepMobile({
         }}
       >
         <View style={styles.container}>
-          {/* IMAGE */}
           <Image
             source={require("../../stores/assets/application3.png")}
             style={styles.image}
@@ -142,7 +122,6 @@ export default function StepMobile({
 
           <Text style={styles.title}>Contact Information</Text>
 
-          {/* GLOBAL ERROR */}
           {!!submitError && (
             <Text
               style={[
@@ -154,7 +133,6 @@ export default function StepMobile({
             </Text>
           )}
 
-          {/* ================= PHONE ================= */}
           <View style={styles.fieldGroup}>
             <Text style={styles.label}>Mobile Number</Text>
 
@@ -182,7 +160,6 @@ export default function StepMobile({
             )}
           </View>
 
-          {/* ================= EMAIL ================= */}
           <View style={styles.fieldGroup}>
             <Text style={styles.label}>Email</Text>
 
@@ -192,6 +169,7 @@ export default function StepMobile({
                 placeholder="example@gmail.com"
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
                 value={email}
                 onChangeText={handleEmailChange}
               />
@@ -206,12 +184,8 @@ export default function StepMobile({
             )}
           </View>
 
-          {/* ================= SUBMIT ================= */}
           <TouchableOpacity
-            style={[
-              styles.button,
-              !canSubmit && { opacity: 0.5 },
-            ]}
+            style={[styles.button, !canSubmit && { opacity: 0.5 }]}
             disabled={!canSubmit}
             onPress={handleSubmit}
           >

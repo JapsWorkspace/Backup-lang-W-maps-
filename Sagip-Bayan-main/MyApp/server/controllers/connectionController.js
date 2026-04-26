@@ -1,9 +1,94 @@
+const mongoose = require("mongoose");
+
 const UserModel = require("../models/User");
 const ConnectionModel = require("../models/Connection");
 
-/* =========================
-   SAFETY STATUS
-========================= */
+function normalizeConnectionCode(code) {
+  return String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "");
+}
+
+function idsMatch(a, b) {
+  if (!a || !b) return false;
+  return String(a) === String(b);
+}
+
+function hasMember(list, userId) {
+  return Array.isArray(list) && list.some((id) => idsMatch(id, userId));
+}
+
+async function addNotification(userId, notification) {
+  if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) return;
+
+  await UserModel.findByIdAndUpdate(userId, {
+    $push: {
+      notifications: {
+        type: notification.type,
+        message: notification.message,
+        connectionId: notification.connectionId || null,
+        actorUserId: notification.actorUserId || null,
+        actorName: notification.actorName || "",
+        actorUsername: notification.actorUsername || "",
+        actorAvatar: notification.actorAvatar || "",
+        connectionCode: notification.connectionCode || "",
+        actionable: Boolean(notification.actionable),
+        handledAt: notification.handledAt || null,
+        read: false,
+        createdAt: new Date(),
+      },
+    },
+  });
+}
+
+async function resolveNotificationActionTarget(connectionId, userId) {
+  const connection = await ConnectionModel.findById(connectionId);
+  if (!connection) {
+    return { error: { status: 404, message: "Connection not found" } };
+  }
+
+  if (!idsMatch(connection.creator, userId)) {
+    return { error: { status: 403, message: "Not authorized" } };
+  }
+
+  return { connection };
+}
+
+async function markOwnerRequestHandled(ownerId, connectionId, memberId) {
+  await UserModel.findByIdAndUpdate(ownerId, {
+    $set: {
+      "notifications.$[notif].handledAt": new Date(),
+      "notifications.$[notif].actionable": false,
+      "notifications.$[notif].read": true,
+    },
+  }, {
+    arrayFilters: [
+      {
+        "notif.type": "CONNECTION_REQUEST",
+        "notif.connectionId": new mongoose.Types.ObjectId(connectionId),
+        "notif.actorUserId": new mongoose.Types.ObjectId(memberId),
+        "notif.handledAt": null,
+      },
+    ],
+  });
+}
+
+async function ensureUserExists(userId) {
+  if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) return null;
+  return UserModel.findById(userId);
+}
+
+function generateConnectionCode(length = 6) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+
+  for (let i = 0; i < length; i += 1) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  return result;
+}
 
 const markSafe = async (req, res) => {
   try {
@@ -24,14 +109,14 @@ const markSafe = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json({
+    return res.json({
       message: "Safety status updated",
       safetyStatus: user.safetyStatus,
       safetyMessage: user.safetyMessage,
     });
   } catch (err) {
     console.error("Mark safe error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -54,40 +139,32 @@ const markNotSafe = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json({
+    return res.json({
       message: "Safety status updated",
       safetyStatus: user.safetyStatus,
     });
   } catch (err) {
     console.error("Mark not safe error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   CONNECTION CREATION
-========================= */
-
-function generateConnectionCode(length = 6) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let result = "";
-
-  for (let i = 0; i < length; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return result;
-}
 
 const createConnection = async (req, res) => {
   try {
     const userId = req.params.id;
+    const user = await ensureUserExists(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
     let code;
     let exists = true;
 
     while (exists) {
       code = generateConnectionCode();
       const check = await ConnectionModel.findOne({ code });
-      exists = !!check;
+      exists = Boolean(check);
     }
 
     const connection = await ConnectionModel.create({
@@ -98,56 +175,98 @@ const createConnection = async (req, res) => {
     });
 
     await UserModel.findByIdAndUpdate(userId, {
-      $push: { connections: connection._id },
+      $addToSet: { connections: connection._id },
     });
 
-    res.json({ message: "Connection created", code });
+    return res.json({
+      message: "Connection created successfully.",
+      code,
+      connectionId: connection._id,
+    });
   } catch (err) {
     console.error("Create connection error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
-/* =========================
-   JOIN CONNECTION
-========================= */
-
 const joinConnection = async (req, res) => {
   try {
-    const { code } = req.body;
     const userId = req.params.id;
+    const code = normalizeConnectionCode(req.body?.code);
+    const requester = await ensureUserExists(userId);
+
+    if (!requester) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!code) {
+      return res.status(400).json({ message: "Connection code is required" });
+    }
 
     const connection = await ConnectionModel.findOne({ code });
     if (!connection) {
-      return res.status(404).json({ message: "Invalid code" });
+      return res.status(404).json({ message: "Invalid or expired connection code." });
+    }
+
+    if (!connection.creator) {
+      return res.status(400).json({ message: "This connection has no owner." });
+    }
+
+    if (idsMatch(connection.creator, userId)) {
+      return res.status(400).json({ message: "You cannot join your own connection." });
+    }
+
+    if (hasMember(connection.members, userId)) {
+      return res.status(400).json({ message: "You are already a member of this connection." });
+    }
+
+    if (hasMember(connection.pendingMembers, userId)) {
+      return res.status(400).json({ message: "Your join request is already pending approval." });
     }
 
     if (connection.members.length >= 5) {
       return res.status(400).json({
-        message: "This connection already has the maximum of 5 members",
+        message: "This connection already has the maximum of 5 members.",
       });
     }
 
-    if (
-      connection.members.includes(userId) ||
-      connection.pendingMembers.includes(userId)
-    ) {
-      return res.json({ message: "Already joined or pending approval" });
-    }
-
-    connection.pendingMembers.push(userId);
+    connection.pendingMembers.push(requester._id);
     await connection.save();
 
-    res.json({ message: "Request sent. Waiting for creator approval" });
+    const requesterName =
+      [requester.fname, requester.lname].filter(Boolean).join(" ").trim() ||
+      requester.username ||
+      "Someone";
+
+    await addNotification(connection.creator, {
+      type: "CONNECTION_REQUEST",
+      message: `${requesterName} requested to join your connection.`,
+      connectionId: connection._id,
+      actorUserId: requester._id,
+      actorName: requesterName,
+      actorUsername: requester.username || "",
+      actorAvatar: requester.avatar || "",
+      connectionCode: connection.code,
+      actionable: true,
+    });
+
+    await addNotification(requester._id, {
+      type: "CONNECTION_REQUEST_SENT",
+      message: `Your request to join connection ${connection.code} was sent.`,
+      connectionId: connection._id,
+      connectionCode: connection.code,
+    });
+
+    return res.json({
+      message: "Request sent. Waiting for creator approval.",
+      connectionId: connection._id,
+      code: connection.code,
+    });
   } catch (err) {
     console.error("Join connection error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   GET CONNECTION MEMBERS
-========================= */
 
 const getConnectionMembers = async (req, res) => {
   try {
@@ -155,23 +274,19 @@ const getConnectionMembers = async (req, res) => {
 
     const connection = await ConnectionModel.findById(connectionId).populate(
       "members",
-      "username avatar location safetyStatus safetyMessage"
+      "fname lname username avatar location safetyStatus safetyMessage"
     );
 
     if (!connection) {
       return res.status(404).json({ message: "Connection not found" });
     }
 
-    res.json(connection.members);
+    return res.json(connection.members);
   } catch (err) {
     console.error("Get members error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   GET USER CONNECTIONS
-========================= */
 
 const getUserConnections = async (req, res) => {
   try {
@@ -180,19 +295,19 @@ const getUserConnections = async (req, res) => {
     const connections = await ConnectionModel.find({
       $or: [{ members: userId }, { creator: userId }],
     })
-      .populate("members", "username avatar location safetyStatus safetyMessage")
-      .populate("pendingMembers", "username avatar");
+      .populate("creator", "fname lname username avatar")
+      .populate(
+        "members",
+        "fname lname username avatar location safetyStatus safetyMessage"
+      )
+      .populate("pendingMembers", "fname lname username avatar");
 
-    res.json(connections);
+    return res.json(connections);
   } catch (err) {
     console.error("Get user connections error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   LEAVE CONNECTION
-========================= */
 
 const leaveConnection = async (req, res) => {
   try {
@@ -203,17 +318,15 @@ const leaveConnection = async (req, res) => {
       return res.status(404).json({ message: "Connection not found" });
     }
 
-    if (connection.creator.toString() === userId) {
+    if (idsMatch(connection.creator, userId)) {
       return res.status(400).json({
         message: "Creator cannot leave their own connection",
       });
     }
 
-    connection.members = connection.members.filter(
-      (id) => id.toString() !== userId
-    );
+    connection.members = connection.members.filter((id) => !idsMatch(id, userId));
     connection.pendingMembers = connection.pendingMembers.filter(
-      (id) => id.toString() !== userId
+      (id) => !idsMatch(id, userId)
     );
 
     await connection.save();
@@ -222,16 +335,12 @@ const leaveConnection = async (req, res) => {
       $pull: { connections: connectionId },
     });
 
-    res.json({ message: "You have left the connection" });
+    return res.json({ message: "You have left the connection" });
   } catch (err) {
     console.error("Leave connection error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   DELETE CONNECTION (CREATOR ONLY)
-========================= */
 
 const deleteConnection = async (req, res) => {
   try {
@@ -242,7 +351,7 @@ const deleteConnection = async (req, res) => {
       return res.status(404).json({ message: "Connection not found" });
     }
 
-    if (connection.creator.toString() !== userId) {
+    if (!idsMatch(connection.creator, userId)) {
       return res.status(403).json({
         message: "Only the creator can delete this connection",
       });
@@ -255,38 +364,43 @@ const deleteConnection = async (req, res) => {
       { $pull: { connections: connectionId } }
     );
 
-    res.json({ message: "Connection deleted successfully" });
+    return res.json({ message: "Connection deleted successfully" });
   } catch (err) {
     console.error("Delete connection error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   APPROVE / REJECT / KICK
-========================= */
 
 const approveMember = async (req, res) => {
   try {
     const { connectionId, memberId, userId } = req.params;
 
-    const connection = await ConnectionModel.findById(connectionId);
-    if (!connection) {
-      return res.status(404).json({ message: "Connection not found" });
+    const { connection, error } = await resolveNotificationActionTarget(
+      connectionId,
+      userId
+    );
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
     }
 
-    if (connection.creator.toString() !== userId) {
-      return res.status(403).json({ message: "Not authorized" });
+    if (!hasMember(connection.pendingMembers, memberId)) {
+      return res.status(400).json({ message: "This join request is no longer pending." });
+    }
+
+    if (hasMember(connection.members, memberId)) {
+      connection.pendingMembers = connection.pendingMembers.filter(
+        (id) => !idsMatch(id, memberId)
+      );
+      await connection.save();
+      return res.json({ message: "Member is already part of this connection." });
     }
 
     if (connection.members.length >= 5) {
-      return res
-        .status(400)
-        .json({ message: "Connection already has 5 members" });
+      return res.status(400).json({ message: "Connection already has 5 members." });
     }
 
     connection.pendingMembers = connection.pendingMembers.filter(
-      (id) => id.toString() !== memberId
+      (id) => !idsMatch(id, memberId)
     );
     connection.members.addToSet(memberId);
 
@@ -295,11 +409,19 @@ const approveMember = async (req, res) => {
     await UserModel.findByIdAndUpdate(memberId, {
       $addToSet: { connections: connection._id },
     });
+    await markOwnerRequestHandled(userId, connectionId, memberId);
 
-    res.json({ message: "Member approved" });
+    await addNotification(memberId, {
+      type: "CONNECTION_APPROVED",
+      message: `You have been accepted into connection ${connection.code}.`,
+      connectionId: connection._id,
+      connectionCode: connection.code,
+    });
+
+    return res.json({ message: "Member approved" });
   } catch (err) {
     console.error("Approve member error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -307,24 +429,36 @@ const rejectMember = async (req, res) => {
   try {
     const { connectionId, memberId, userId } = req.params;
 
-    const connection = await ConnectionModel.findById(connectionId);
-    if (!connection) {
-      return res.status(404).json({ message: "Connection not found" });
+    const { connection, error } = await resolveNotificationActionTarget(
+      connectionId,
+      userId
+    );
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
     }
 
-    if (connection.creator.toString() !== userId) {
-      return res.status(403).json({ message: "Not authorized" });
+    if (!hasMember(connection.pendingMembers, memberId)) {
+      return res.status(400).json({ message: "This join request is no longer pending." });
     }
 
     connection.pendingMembers = connection.pendingMembers.filter(
-      (id) => id.toString() !== memberId
+      (id) => !idsMatch(id, memberId)
     );
 
     await connection.save();
-    res.json({ message: "Member rejected" });
+    await markOwnerRequestHandled(userId, connectionId, memberId);
+
+    await addNotification(memberId, {
+      type: "CONNECTION_REJECTED",
+      message: `Your request to join connection ${connection.code} was rejected.`,
+      connectionId: connection._id,
+      connectionCode: connection.code,
+    });
+
+    return res.json({ message: "Member rejected" });
   } catch (err) {
     console.error("Reject member error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -337,69 +471,60 @@ const kickMember = async (req, res) => {
       return res.status(404).json({ message: "Connection not found" });
     }
 
-    if (connection.creator.toString() !== userId) {
+    if (!idsMatch(connection.creator, userId)) {
       return res.status(403).json({ message: "Not authorized" });
     }
 
-    if (connection.creator.toString() === memberId) {
+    if (idsMatch(connection.creator, memberId)) {
       return res.status(400).json({ message: "Creator cannot be kicked" });
     }
 
-    connection.members = connection.members.filter(
-      (id) => id.toString() !== memberId
-    );
+    connection.members = connection.members.filter((id) => !idsMatch(id, memberId));
     connection.pendingMembers = connection.pendingMembers.filter(
-      (id) => id.toString() !== memberId
+      (id) => !idsMatch(id, memberId)
     );
 
     await connection.save();
 
     await UserModel.findByIdAndUpdate(memberId, {
       $pull: { connections: connection._id },
-      $push: {
-        notifications: {
-          type: "KICKED",
-          message: "You were removed from a family connection.",
-          connectionId: connection._id,
-          createdAt: new Date(),
-          read: false,
-        },
-      },
     });
 
-    res.json({ message: "Member has been removed from the connection" });
+    await addNotification(memberId, {
+      type: "CONNECTION_KICKED",
+      message: "You were removed from a family connection.",
+      connectionId: connection._id,
+    });
+
+    return res.json({ message: "Member has been removed from the connection" });
   } catch (err) {
     console.error("Kick member error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   GET CONNECTION BY ID
-========================= */
 
 const getConnectionById = async (req, res) => {
   try {
     const { connectionId } = req.params;
 
     const connection = await ConnectionModel.findById(connectionId)
-      .populate("members", "username avatar location safetyStatus safetyMessage")
-      .populate("pendingMembers", "username avatar");
+      .populate("creator", "fname lname username avatar")
+      .populate(
+        "members",
+        "fname lname username avatar location safetyStatus safetyMessage"
+      )
+      .populate("pendingMembers", "fname lname username avatar");
 
     if (!connection) {
       return res.status(404).json({ message: "Connection not found" });
     }
 
-    res.json(connection);
+    return res.json(connection);
   } catch (err) {
     console.error("Get connection by ID error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
-
-/* =========================
-   EXPORTS
-========================= */
 
 module.exports = {
   createConnection,

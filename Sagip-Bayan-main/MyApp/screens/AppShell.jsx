@@ -13,12 +13,15 @@ import Guidelines from "./Guidelines";
 import SafetyMark from "./SafetyMark";
 import PersonalDetails from "./PersonalDetails";
 import PasswordSecurity from "./PasswordSecurity";
+import DonationScreen from "./DonationScreen";
 
 import { MapContext } from "./contexts/MapContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
 import SearchProvider from "./SearchContext";
 import api from "../lib/api";
 
 const Stack = createNativeStackNavigator();
+const MAP_UI_SCREENS = new Set(["Map"]);
 
 export default function AppShell() {
   const [activeMapModule, setActiveMapModule] = useState(null);
@@ -41,6 +44,7 @@ export default function AppShell() {
   const [isBottomNavInteracting, setIsBottomNavInteracting] = useState(false);
 
   const [currentScreen, setCurrentScreen] = useState("Map");
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -126,69 +130,84 @@ export default function AppShell() {
   );
 
   const showBottomNav =
-    currentScreen === "Map" || currentScreen === "MainCenter";
+    MAP_UI_SCREENS.has(currentScreen) && !drawerOpen && !activeMapModule;
 
   return (
     <View style={styles.root}>
       <MapContext.Provider value={mapContextValue}>
-        <SearchProvider>
-          <AppLayout currentScreen={currentScreen}>
-            <Stack.Navigator screenOptions={{ headerShown: false }}>
-              <Stack.Screen
-                name="Map"
-                component={Map}
-                listeners={{
-                  focus: () => setCurrentScreen("Map"),
-                }}
-              />
-              <Stack.Screen
-                name="MainCenter"
-                component={MainCenter}
-                listeners={{
-                  focus: () => setCurrentScreen("MainCenter"),
-                }}
-              />
-              <Stack.Screen
-                name="Profile"
-                component={Profile}
-                listeners={{
-                  focus: () => setCurrentScreen("Profile"),
-                }}
-              />
-              <Stack.Screen
-                name="Guidelines"
-                component={Guidelines}
-                listeners={{
-                  focus: () => setCurrentScreen("Guidelines"),
-                }}
-              />
-              <Stack.Screen
-                name="Connection"
-                component={SafetyMark}
-                listeners={{
-                  focus: () => setCurrentScreen("Connection"),
-                }}
-              />
-              <Stack.Screen
-                name="PersonalDetails"
-                component={PersonalDetails}
-                listeners={{
-                  focus: () => setCurrentScreen("PersonalDetails"),
-                }}
-              />
-              <Stack.Screen
-                name="PasswordSecurity"
-                component={PasswordSecurity}
-                listeners={{
-                  focus: () => setCurrentScreen("PasswordSecurity"),
-                }}
-              />
-            </Stack.Navigator>
-          </AppLayout>
-        </SearchProvider>
+        <NotificationProvider>
+          <SearchProvider>
+            <AppLayout
+              currentScreen={currentScreen}
+              drawerOpen={drawerOpen}
+              onDrawerOpenChange={setDrawerOpen}
+            >
+              <Stack.Navigator screenOptions={{ headerShown: false }}>
+                <Stack.Screen
+                  name="Map"
+                  component={Map}
+                  listeners={{
+                    focus: () => setCurrentScreen("Map"),
+                  }}
+                />
+                <Stack.Screen
+                  name="MainCenter"
+                  component={MainCenter}
+                  listeners={{
+                    focus: () => setCurrentScreen("MainCenter"),
+                  }}
+                />
+                <Stack.Screen
+                  name="Profile"
+                  component={Profile}
+                  listeners={{
+                    focus: () => setCurrentScreen("Profile"),
+                  }}
+                />
+                <Stack.Screen
+                  name="Guidelines"
+                  component={Guidelines}
+                  listeners={{
+                    focus: () => setCurrentScreen("Guidelines"),
+                  }}
+                />
+                <Stack.Screen
+                  name="Connection"
+                  component={SafetyMark}
+                  listeners={{
+                    focus: () => setCurrentScreen("Connection"),
+                  }}
+                />
+                <Stack.Screen
+                  name="PersonalDetails"
+                  component={PersonalDetails}
+                  listeners={{
+                    focus: () => setCurrentScreen("PersonalDetails"),
+                  }}
+                />
+                <Stack.Screen
+                  name="PasswordSecurity"
+                  component={PasswordSecurity}
+                  listeners={{
+                    focus: () => setCurrentScreen("PasswordSecurity"),
+                  }}
+                />
+                <Stack.Screen
+                  name="DonationScreen"
+                  component={DonationScreen}
+                  listeners={{
+                    focus: () => setCurrentScreen("DonationScreen"),
+                  }}
+                />
+              </Stack.Navigator>
+            </AppLayout>
+          </SearchProvider>
+        </NotificationProvider>
+
+        {showBottomNav && <View style={styles.bottomSystemArea} pointerEvents="none" />}
 
         {showBottomNav && (
-          <View style={styles.navWrapper} pointerEvents="auto">
+          <View style={styles.navWrapper} pointerEvents="box-none">
             <NewBottomNav />
           </View>
         )}
@@ -206,10 +225,24 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 0,
-    height: 120,
+    bottom: 22,
+    height: 132,
     zIndex: 99999,
     elevation: 99999,
     justifyContent: "flex-end",
+    backgroundColor: "transparent",
+  },
+
+  bottomSystemArea: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 56,
+    zIndex: 99980,
+    elevation: 99980,
+    backgroundColor: "#f6faf7",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(209,224,216,0.9)",
   },
 });

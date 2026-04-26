@@ -11,6 +11,8 @@ import PrivacySwiper from "./screens/PrivacySwiper";
 import RegisterFlow from "./screens/signup/RegisterFlow";
 import SendOtp from "./screens/SendOtp";
 import VerifyOtp from "./screens/VerifyOtp";
+import EmailVerifyer from "./screens/EmailVerifyer";
+import PasswordReset from "./screens/PasswordReset";
 
 /* ================= POST-LOGIN APP ================= */
 import AppShell from "./screens/AppShell";
@@ -32,6 +34,8 @@ function AuthStack() {
       <Stack.Screen name="DataPrivacy" component={PrivacySwiper} />
       <Stack.Screen name="RegisterFlow" component={RegisterFlow} />
       <Stack.Screen name="SendOtp" component={SendOtp} />
+      <Stack.Screen name="EmailVerifyer" component={EmailVerifyer} />
+      <Stack.Screen name="PasswordReset" component={PasswordReset} />
       <Stack.Screen
         name="VerifyOtp"
         component={VerifyOtp}

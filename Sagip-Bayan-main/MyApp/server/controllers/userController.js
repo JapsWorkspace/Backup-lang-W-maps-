@@ -5,6 +5,10 @@ const sendOTP = require("../utils/sendOTP");
 const cloudinary = require("../config/cloudinary");
 const bcrypt = require("bcryptjs");
 
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /* =========================
    REGISTER
 ========================= */
@@ -131,7 +135,12 @@ const loginUser = async (req, res) => {
   }
   
   try {
-    const user = await UserModel.findOne({ username });
+    const normalizedUsername = String(username).trim();
+    const user =
+      (await UserModel.findOne({ username: normalizedUsername })) ||
+      (await UserModel.findOne({
+        username: { $regex: new RegExp(`^${escapeRegex(normalizedUsername)}$`, "i") },
+      }));
 
     if (!user) {
       return res.status(401).json({ message: "Invalid username or password" });
@@ -302,6 +311,32 @@ const verifyOtp = (req, res) => {
     });
 };
 
+const verifyEmailForReset = async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await UserModel.findOne({ email }).select(
+      "_id email fname lname username"
+    );
+
+    if (!user) {
+      return res.status(404).json({ exists: false, message: "Email not found" });
+    }
+
+    return res.json({
+      exists: true,
+      user,
+    });
+  } catch (err) {
+    console.error("Verify reset email error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
 /* =========================
    ARCHIVE / RESTORE / TWO FACTOR
 ========================= */
@@ -399,6 +434,65 @@ const getUserById = async (req, res) => {
   }
 };
 
+const getUserNotifications = async (req, res) => {
+  try {
+    const user = await UserModel.findById(req.params.id).select("notifications");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const notifications = Array.isArray(user.notifications)
+      ? [...user.notifications].sort(
+          (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+        )
+      : [];
+
+    return res.json(notifications);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+const markNotificationsRead = async (req, res) => {
+  try {
+    const user = await UserModel.findByIdAndUpdate(
+      req.params.id,
+      { $set: { "notifications.$[].read": true } },
+      { new: true }
+    ).select("notifications");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json({ message: "Notifications marked as read." });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+const clearNotifications = async (req, res) => {
+  try {
+    const user = await UserModel.findByIdAndUpdate(
+      req.params.id,
+      { $set: { notifications: [] } },
+      { new: true }
+    ).select("_id");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json({ message: "Notifications cleared." });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
 
 const uploadAvatar = async (req, res) => {
   try {
@@ -450,6 +544,7 @@ module.exports = {
   verifyEmail,
   getUsers,
   updateUser,
+  verifyEmailForReset,
   sendOtp,
   verifyOtp,
   archiveUser,
@@ -459,4 +554,7 @@ module.exports = {
   updateLocation,
   getUserById,
   uploadAvatar,
+  getUserNotifications,
+  markNotificationsRead,
+  clearNotifications,
 };

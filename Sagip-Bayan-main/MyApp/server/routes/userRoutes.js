@@ -18,6 +18,7 @@ router.get("/users", userController.getUsers);
 router.post("/register", userController.registerUser);
 router.put("/update/:id", userController.updateUser);
 router.post("/login", userController.loginUser);
+router.post("/verify-email", userController.verifyEmailForReset);
 
 router.put("/archive/:id", userController.archiveUser);
 router.put("/restore/:id", userController.restoreUser);
@@ -31,6 +32,9 @@ router.post("/verify-otp", userController.verifyOtp);
 router.put("/location/:id", userController.updateLocation);
 
 router.put("/twofactor/:id", userController.toggleTwoFactor);
+router.get("/:id/notifications", userController.getUserNotifications);
+router.put("/:id/notifications/read-all", userController.markNotificationsRead);
+router.delete("/:id/notifications", userController.clearNotifications);
 
 router.get("/:id", userController.getUserById);
 

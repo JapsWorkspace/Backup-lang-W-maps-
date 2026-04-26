@@ -7,7 +7,6 @@ import {
   Easing,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { FlatList } from "react-native-gesture-handler";
 
@@ -15,12 +14,6 @@ import styles from "../Designs/NewBottomNav";
 import { MapContext } from "./contexts/MapContext";
 
 const MODULES = [
-  {
-    key: "home",
-    label: "Home",
-    helper: "Overview",
-    icon: "home-outline",
-  },
   {
     key: "incident",
     label: "Incident",
@@ -212,53 +205,33 @@ function DockCard({
 }
 
 export default function NewBottomNav() {
-  const navigation = useNavigation();
   const {
     activeMapModule,
     setActiveMapModule,
     setPanelState,
+    setPanelY,
+    setIsBottomNavInteracting,
     setEvac,
     setRouteRequested,
     setRoutes,
     setActiveRoute,
-    setIsBottomNavInteracting,
   } = useContext(MapContext);
 
-  const [activeDockItem, setActiveDockItem] = useState("home");
+  const [activeDockItem, setActiveDockItem] = useState("incident");
   const moduleData = useMemo(() => MODULES, []);
 
   if (activeMapModule) return null;
 
-  const goHome = () => {
+  const openModule = (moduleKey) => {
     setIsBottomNavInteracting(false);
-    setActiveDockItem("home");
-    setActiveMapModule(null);
-    setPanelState("HIDDEN");
+    setActiveDockItem(moduleKey);
     setEvac(null);
     setRouteRequested(false);
     setRoutes([]);
     setActiveRoute(null);
-
-    navigation.navigate("AppShell", {
-      screen: "Map",
-    });
-  };
-
-  const openModule = (moduleKey) => {
-    if (moduleKey === "home") {
-      goHome();
-      return;
-    }
-
-    setIsBottomNavInteracting(false);
-    setActiveDockItem(moduleKey);
     setActiveMapModule(moduleKey);
-    setPanelState(moduleKey === "evac" ? "PLACE_INFO" : "HIDDEN");
-
-    navigation.navigate("AppShell", {
-      screen: "Map",
-      params: { module: moduleKey },
-    });
+    setPanelState("HIDDEN");
+    setPanelY(null);
   };
 
   const handleMomentumEnd = (event) => {

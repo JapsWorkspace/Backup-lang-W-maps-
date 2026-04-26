@@ -11,6 +11,14 @@ import {
 } from "react-native";
 
 import styles from "../../Designs/StepPersonal";
+import {
+  ADDRESS_MAX_LENGTH,
+  USERNAME_MAX_LENGTH,
+  getUsernameError,
+  sanitizeName,
+  sanitizeTextInput,
+  sanitizeUsername,
+} from "../utils/validation";
 
 export default function StepPersonal({
   fName = "",
@@ -37,11 +45,6 @@ export default function StepPersonal({
   const setFocus = (key, value) =>
     setFocused((prev) => ({ ...prev, [key]: value }));
 
-  /* ================= SANITIZE ================= */
-  const sanitizeName = (t) => t.replace(/[^a-zA-Z\s]/g, "");
-  const sanitizeUsername = (t) =>
-    t.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase();
-
   /* ================= SYNC TO PARENT ================= */
   useEffect(() => onFNameChange(localFName), [localFName]);
   useEffect(() => onLNameChange(localLName), [localLName]);
@@ -52,24 +55,22 @@ export default function StepPersonal({
   const fNameError =
     localFName.trim().length >= 2
       ? ""
-      : "First name must be at least 2 characters";
+      : "First name must be at least 2 characters.";
 
   const lNameError =
     localLName.trim().length >= 2
       ? ""
-      : "Last name must be at least 2 characters";
+      : "Last name must be at least 2 characters.";
 
-  const usernameError = useMemo(() => {
-    if (!localUsername) return "Username is required";
-    if (!/^[a-zA-Z0-9_]{4,}$/.test(localUsername))
-      return "Username must be 4+ characters (letters, numbers, _)";
-    return "";
-  }, [localUsername]);
+  const usernameError = useMemo(
+    () => getUsernameError(localUsername),
+    [localUsername]
+  );
 
   const addressError =
-    localAddress.trim().length >= 5
+    sanitizeTextInput(localAddress, { maxLength: ADDRESS_MAX_LENGTH }).length >= 5
       ? ""
-      : "Address must be at least 5 characters";
+      : "Address must be at least 5 characters.";
 
   const canProceed =
     !fNameError &&
@@ -92,7 +93,9 @@ export default function StepPersonal({
       fName: localFName,
       lName: localLName,
       username: localUsername,
-      address: localAddress,
+      address: sanitizeTextInput(localAddress, {
+        maxLength: ADDRESS_MAX_LENGTH,
+      }),
     });
   };
 
@@ -127,6 +130,7 @@ export default function StepPersonal({
           onFocus={() => setFocus("fName", true)}
           onBlur={() => setFocus("fName", false)}
           onChangeText={(t) => setLocalFName(sanitizeName(t))}
+          maxLength={50}
         />
 
         {/* LAST NAME */}
@@ -140,6 +144,7 @@ export default function StepPersonal({
           onFocus={() => setFocus("lName", true)}
           onBlur={() => setFocus("lName", false)}
           onChangeText={(t) => setLocalLName(sanitizeName(t))}
+          maxLength={50}
         />
 
         {/* USERNAME */}
@@ -153,9 +158,8 @@ export default function StepPersonal({
           autoCapitalize="none"
           onFocus={() => setFocus("username", true)}
           onBlur={() => setFocus("username", false)}
-          onChangeText={(t) =>
-            setLocalUsername(sanitizeUsername(t))
-          }
+          onChangeText={(t) => setLocalUsername(sanitizeUsername(t))}
+          maxLength={USERNAME_MAX_LENGTH}
         />
 
         {/* ADDRESS */}
@@ -168,7 +172,12 @@ export default function StepPersonal({
           value={localAddress}
           onFocus={() => setFocus("address", true)}
           onBlur={() => setFocus("address", false)}
-          onChangeText={setLocalAddress}
+          onChangeText={(t) =>
+            setLocalAddress(
+              sanitizeTextInput(t, { maxLength: ADDRESS_MAX_LENGTH })
+            )
+          }
+          maxLength={ADDRESS_MAX_LENGTH}
         />
 
         {/* NEXT */}

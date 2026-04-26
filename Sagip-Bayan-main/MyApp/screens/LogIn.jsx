@@ -16,63 +16,76 @@ import { Ionicons } from "@expo/vector-icons";
 import api from "../lib/api";
 import styles, { COLORS } from "../Designs/LogIn";
 import { UserContext } from "./UserContext";
+import {
+  sanitizeUsername,
+} from "./utils/validation";
 
 export default function LogIn({ navigation }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { setUser } = useContext(UserContext);
 
-  /* ---------------- SANITIZATION ---------------- */
-  const sanitizeUsername = (text) =>
-    text.replace(/[^a-zA-Z0-9]/g, "").trimStart();
-
   /* ---------------- VALIDATION ---------------- */
   const validate = () => {
-    if (!username) {
+    if (!sanitizeUsername(username)) {
       setError("Username is required.");
       return false;
     }
-    if (!password) {
+
+    if (!String(password || "").trim()) {
       setError("Password is required.");
       return false;
     }
+
     return true;
   };
 
   /* ---------------- LOGIN ---------------- */
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setError("");
 
-    if (!validate()) return;
+    if (isSubmitting || !validate()) return;
 
-    api
-      .post("/user/login", { username, password })
-      .then((res) => {
-        const data = res.data;
+    setIsSubmitting(true);
 
-        if (data.twoFactor) {
-          navigation.navigate("VerifyOtp", {
-            userId: data.userId,
-            email: data.email,
-          });
-          api.post("/user/send-otp", { email: data.email });
-        } else {
-          setUser({
-            ...data.user,
-            id: data.user._id,
-          });
-
-          navigation.replace("AppShell");
-          setUsername("");
-          setPassword("");
-        }
-      })
-      .catch((err) => {
-        setError(err.response?.data?.message || "Login failed");
+    try {
+      const cleanUsername = sanitizeUsername(username);
+      const res = await api.post("/user/login", {
+        username: cleanUsername,
+        password,
       });
+      const data = res.data || {};
+
+      if (data.twoFactor && data.email) {
+        navigation.navigate("VerifyOtp", {
+          userId: data.userId,
+          email: data.email,
+        });
+        await api.post("/user/send-otp", { email: data.email });
+        return;
+      }
+
+      if (!data.user?._id) {
+        setError("We could not complete sign-in. Please try again.");
+        return;
+      }
+
+      setUser({
+        ...data.user,
+        id: data.user._id,
+      });
+
+      setUsername("");
+      setPassword("");
+    } catch (err) {
+      setError(err.response?.data?.message || "Login failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   /* ---------------- SIGNUP FLOW ENTRY ---------------- */
@@ -149,7 +162,7 @@ export default function LogIn({ navigation }) {
 
               {/* Forgot password */}
               <TouchableOpacity
-                onPress={() => navigation.navigate("SendOtp")}
+                onPress={() => navigation.navigate("EmailVerifyer")}
               >
                 <Text
                   style={{
@@ -167,8 +180,11 @@ export default function LogIn({ navigation }) {
               <TouchableOpacity
                 style={styles.button}
                 onPress={handleLogin}
+                disabled={isSubmitting}
               >
-                <Text style={styles.buttonText}>LOGIN</Text>
+                <Text style={styles.buttonText}>
+                  {isSubmitting ? "LOGGING IN..." : "LOGIN"}
+                </Text>
               </TouchableOpacity>
 
               {/* Sign up */}

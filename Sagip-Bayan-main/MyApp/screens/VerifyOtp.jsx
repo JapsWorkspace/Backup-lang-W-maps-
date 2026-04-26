@@ -1,19 +1,37 @@
-// screens/VerifyOtp.jsx
-import React, { useState, useRef, useContext, useEffect } from "react";
-import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
+import React, { useState, useRef, useContext, useEffect, useMemo } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  Button,
+  StyleSheet,
+  Alert,
+} from "react-native";
+
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
+import { isValidEmail, normalizeEmail } from "./utils/validation";
+
+const OTP_LENGTH = 6;
 
 export default function VerifyOtp({ route, navigation }) {
-  const [otp, setOtp] = useState(new Array(6).fill("")); // array of 6 digits
-  const { email } = route.params; // use email to identify user
+  const safeEmail = normalizeEmail(route?.params?.email);
+  const purpose = route?.params?.purpose;
+  const userId = route?.params?.userId;
+  const [otp, setOtp] = useState(new Array(OTP_LENGTH).fill(""));
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { setUser } = useContext(UserContext);
-
-  const inputsRef = useRef([]); // store refs to TextInputs
-
-  // 🔹 OTP TIMER (15 MINUTES)
+  const inputsRef = useRef([]);
   const [timeLeft, setTimeLeft] = useState(15 * 60);
   const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (!isValidEmail(safeEmail)) {
+      Alert.alert("Invalid Request", "A valid email is required to verify OTP.", [
+        { text: "OK", onPress: () => navigation.replace("LogIn") },
+      ]);
+    }
+  }, [navigation, safeEmail]);
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -39,62 +57,95 @@ export default function VerifyOtp({ route, navigation }) {
     return `${minutes}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  const handleChange = (text, index) => {
-    if (/^\d*$/.test(text)) {
-      const newOtp = [...otp];
-      newOtp[index] = text;
-      setOtp(newOtp);
+  const enteredOtp = useMemo(() => otp.join(""), [otp]);
+  const canSubmit =
+    enteredOtp.length === OTP_LENGTH &&
+    /^\d{6}$/.test(enteredOtp) &&
+    timeLeft > 0 &&
+    !isSubmitting &&
+    isValidEmail(safeEmail);
 
-      if (text.length === 1 && index < 5) {
-        inputsRef.current[index + 1].focus();
-      }
+  const handleChange = (text, index) => {
+    const digit = String(text || "").replace(/\D/g, "").slice(-1);
+    const nextOtp = [...otp];
+    nextOtp[index] = digit;
+    setOtp(nextOtp);
+
+    if (digit && index < OTP_LENGTH - 1) {
+      inputsRef.current[index + 1]?.focus();
     }
   };
 
-  const handleSubmit = () => {
-    const enteredOtp = otp.join("");
-    if (enteredOtp.length < 6) {
-      Alert.alert("Error", "Please enter all 6 digits");
+  const handleSubmit = async () => {
+    if (!canSubmit) {
+      Alert.alert("Error", "Please enter the full 6-digit OTP.");
       return;
     }
 
-    api
-      .post("/user/verify-otp", { email, otp: enteredOtp })
-      .then(() => {
-        Alert.alert("Success", "OTP verified!");
+    try {
+      setIsSubmitting(true);
+      await api.post("/user/verify-otp", { email: safeEmail, otp: enteredOtp });
 
-        // Fetch user by email and set context
-        api
-          .get("/user/users")
-          .then((res) => {
-            const user = res.data.find((u) => u.email === email);
-            if (user) {
-              setUser(user);
-              navigation.replace("AppShell");
-            } else {
-              Alert.alert("Error", "User not found after OTP verification");
-            }
-          })
-          .catch((err) => {
-            console.error("Error fetching users:", err);
-            Alert.alert("Error", "Could not log in. Try again.");
-          });
-      })
-      .catch((err) => {
-        console.error(err);
-        Alert.alert("Error", err.response?.data?.message || "Invalid OTP");
-      });
+      if (purpose === "passwordReset") {
+        let resetUserId = userId;
+
+        if (!resetUserId) {
+          const res = await api.get("/user/users");
+          const users = Array.isArray(res.data) ? res.data : [];
+          const user = users.find(
+            (item) => normalizeEmail(item?.email) === safeEmail
+          );
+          resetUserId = user?._id || user?.id;
+        }
+
+        if (!resetUserId) {
+          Alert.alert("Error", "Account not found after OTP verification.");
+          return;
+        }
+
+        Alert.alert("Success", "OTP verified.");
+        navigation.replace("PasswordReset", {
+          email: safeEmail,
+          userId: resetUserId,
+        });
+        return;
+      }
+
+      Alert.alert("Success", "OTP verified.");
+
+      const res = await api.get("/user/users");
+      const users = Array.isArray(res.data) ? res.data : [];
+      const user = users.find(
+        (item) => normalizeEmail(item?.email) === safeEmail
+      );
+
+      if (!user) {
+        Alert.alert("Error", "User not found after OTP verification.");
+        return;
+      }
+
+      setUser(user);
+    } catch (err) {
+      Alert.alert("Error", err?.response?.data?.message || "Invalid OTP.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Enter OTP</Text>
+      <Text style={styles.subtitle} numberOfLines={2}>
+        {safeEmail || "Email unavailable"}
+      </Text>
 
       <View style={styles.otpContainer}>
         {otp.map((digit, index) => (
           <TextInput
             key={index}
-            ref={(el) => (inputsRef.current[index] = el)}
+            ref={(el) => {
+              inputsRef.current[index] = el;
+            }}
             style={styles.otpBox}
             keyboardType="numeric"
             maxLength={1}
@@ -104,12 +155,15 @@ export default function VerifyOtp({ route, navigation }) {
         ))}
       </View>
 
-      {/* 🔹 TIMER DISPLAY */}
-      <Text style={{ marginBottom: 10 }}>
+      <Text style={styles.timerText}>
         OTP will expire in {formatTime(timeLeft)}
       </Text>
 
-      <Button title="Verify OTP" onPress={handleSubmit} />
+      <Button
+        title={isSubmitting ? "Verifying..." : "Verify OTP"}
+        onPress={handleSubmit}
+        disabled={!canSubmit}
+      />
     </View>
   );
 }
@@ -123,7 +177,11 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 24,
+    marginBottom: 8,
+  },
+  subtitle: {
     marginBottom: 20,
+    color: "#647067",
   },
   otpContainer: {
     flexDirection: "row",
@@ -139,5 +197,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 20,
     borderRadius: 5,
+  },
+  timerText: {
+    marginBottom: 10,
   },
 });

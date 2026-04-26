@@ -1,7 +1,8 @@
 // screens/MainCenter.jsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import AppLayout from './AppLayout';
+import JaenWeatherForecast from './components/JaenWeatherForecast';
 
 import {
   View,
@@ -21,6 +22,7 @@ import {
 import MapView, { Marker, Callout, PROVIDER_GOOGLE } from 'react-native-maps';
 import { MarkerImages /* getMarkerImageBySeverity */ } from './MapIcon';
 import useJaenPlaceSearch from "./hooks/useJaenPlaceSearch";
+import { normalizeCoordinate } from "./utils/validation";
 
 
 
@@ -128,6 +130,10 @@ export default function MainCenter({ navigation }) {
   });
 
   const pinPx = markerSizeFromDelta(region.latitudeDelta);
+  const markerCoordinate = useMemo(
+    () => normalizeCoordinate({ latitude: position?.[0], longitude: position?.[1] }),
+    [position]
+  );
 
   useEffect(() => {
     mapRef.current?.animateToRegion(region, 250);
@@ -246,13 +252,15 @@ export default function MainCenter({ navigation }) {
             reverseGeocode(target.latitude, target.longitude);
           }}
         >
-          <Marker coordinate={{ latitude: position[0], longitude: position[1] }}>
-            <Animated.Image
-              source={MarkerImages.def}
-              style={{ width: pinPx, height: pinPx, transform: [{ scale: dropScale }] }}
-              resizeMode="contain"
-            />
-          </Marker>
+          {markerCoordinate && (
+            <Marker coordinate={markerCoordinate}>
+              <Animated.Image
+                source={MarkerImages.def}
+                style={{ width: pinPx, height: pinPx, transform: [{ scale: dropScale }] }}
+                resizeMode="contain"
+              />
+            </Marker>
+          )}
         </MapView>
       </View>
 
@@ -283,6 +291,8 @@ export default function MainCenter({ navigation }) {
             >
 
              <View style={styles.gridWrap}>
+  <JaenWeatherForecast />
+
   <View style={styles.row}>
     {/* PROFILE TILE */}
     <TouchableOpacity
