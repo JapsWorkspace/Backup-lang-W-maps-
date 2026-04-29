@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 
 import styles from "../../Designs/StepSecurity";
+import useFormAutoScroll from "../hooks/useFormAutoScroll";
 import { getPasswordError } from "../utils/validation";
 
 export default function StepSecurity({
@@ -42,6 +43,7 @@ export default function StepSecurity({
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
   /* ================= CLEAN VALUES ================= */
   const cleanPassword = password.trim();
@@ -103,6 +105,7 @@ export default function StepSecurity({
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{
           flexGrow: 1,
           padding: 24,
@@ -130,11 +133,16 @@ export default function StepSecurity({
             placeholder="Password"
             secureTextEntry={!showPassword}
             value={password}
-            onFocus={() => setFocus("password", true)}
+            onFocus={() => {
+              setFocus("password", true);
+              scrollToInput("password");
+            }}
+            onLayout={registerInput("password")}
             onBlur={() => setFocus("password", false)}
             onChangeText={setPassword}
             autoCapitalize="none"
             autoCorrect={false}
+            maxLength={64}
           />
 
           <TouchableOpacity
@@ -160,11 +168,16 @@ export default function StepSecurity({
             placeholder="Confirm Password"
             secureTextEntry={!showConfirm}
             value={confirmPassword}
-            onFocus={() => setFocus("confirm", true)}
+            onFocus={() => {
+              setFocus("confirm", true);
+              scrollToInput("confirm");
+            }}
+            onLayout={registerInput("confirm")}
             onBlur={() => setFocus("confirm", false)}
             onChangeText={setConfirmPassword}
             autoCapitalize="none"
             autoCorrect={false}
+            maxLength={64}
           />
 
           <TouchableOpacity

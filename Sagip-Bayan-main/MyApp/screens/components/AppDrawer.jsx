@@ -17,9 +17,9 @@ const DEFAULT_AVATAR =
   "https://ui-avatars.com/api/?background=E5E7EB&color=6B7280&rounded=true&name=User";
 
 const { width } = Dimensions.get("window");
-const DRAWER_WIDTH = Math.min(width * 0.8, 340);
+const DRAWER_WIDTH = Math.min(width * 0.84, 360);
 
-const PRIMARY_TILES = [
+const QUICK_ACTIONS = [
   {
     icon: "home-outline",
     label: "Home",
@@ -43,44 +43,37 @@ const PRIMARY_TILES = [
     route: "Map",
     params: { module: "flood" },
   },
+];
+
+const RESOURCE_ITEMS = [
   {
     icon: "heart-outline",
     label: "Donate",
     route: "DonationScreen",
   },
-];
-
-const MENU_GROUPS = [
   {
-    title: "Resources",
-    items: [
-      {
-        icon: "reader-outline",
-        label: "Guidelines",
-        route: "Guidelines",
-      },
-      {
-        icon: "map-outline",
-        label: "Digital Twin",
-        route: "Map",
-        params: { module: "barangay" },
-      },
-      {
-        icon: "cube-outline",
-        label: "Virtual Twin",
-        route: "MainCenter",
-      },
-    ],
+    icon: "reader-outline",
+    label: "Guidelines",
+    route: "Guidelines",
   },
   {
-    title: "Account and Security",
-    items: [
-      {
-        icon: "settings-outline",
-        label: "Account",
-        route: "Profile",
-      },
-    ],
+    icon: "map-outline",
+    label: "Digital Twin",
+    route: "Map",
+    params: { module: "barangay" },
+  },
+  {
+    icon: "cube-outline",
+    label: "Virtual Twin",
+    route: "MainCenter",
+  },
+];
+
+const ACCOUNT_ITEMS = [
+  {
+    icon: "person-circle-outline",
+    label: "Account",
+    route: "Profile",
   },
 ];
 
@@ -95,7 +88,7 @@ export default function AppDrawer({
   useEffect(() => {
     Animated.timing(translateX, {
       toValue: 0,
-      duration: 260,
+      duration: 240,
       useNativeDriver: true,
     }).start();
   }, [translateX]);
@@ -103,7 +96,7 @@ export default function AppDrawer({
   const closeDrawer = (cb) => {
     Animated.timing(translateX, {
       toValue: -DRAWER_WIDTH,
-      duration: 220,
+      duration: 200,
       useNativeDriver: true,
     }).start(() => {
       onRequestClose();
@@ -129,92 +122,122 @@ export default function AppDrawer({
       : `${BASE_URL}${user.avatar}`
     : DEFAULT_AVATAR;
 
-  const displayName = `${user?.fname || ""} ${user?.lname || ""}`.trim() || "Resident";
+  const displayName =
+    `${user?.fname || ""} ${user?.lname || ""}`.trim() || "Resident";
 
   return (
     <View style={styles.overlay}>
       <Animated.View style={[styles.drawer, { transform: [{ translateX }] }]}>
-        <View style={styles.topRow}>
-          <View style={styles.brandBlock}>
-            <View style={styles.brandBadge}>
-              <Ionicons name="shield-half-outline" size={18} color="#355A2C" />
+        <View style={styles.headerRow}>
+          <View style={styles.headerBrand}>
+            <View style={styles.headerBadge}>
+              <Ionicons name="shield-half-outline" size={20} color="#1F4D36" />
             </View>
-            <View>
-              <Text style={styles.brand}>Main Menu</Text>
-              <Text style={styles.brandSub}>Safety operations and account access</Text>
+            <View style={styles.headerCopy}>
+              <Text style={styles.headerEyebrow}>Disaster Response</Text>
+              <Text style={styles.headerTitle}>Main Menu</Text>
             </View>
           </View>
+
           <TouchableOpacity
-            onPress={() => closeDrawer()}
             style={styles.closeBtn}
-            activeOpacity={0.78}
+            onPress={() => closeDrawer()}
+            activeOpacity={0.82}
           >
-            <Ionicons name="close" size={20} color="#203125" />
+            <Ionicons name="close" size={20} color="#1F2937" />
           </TouchableOpacity>
         </View>
 
-        <View style={styles.featureCard}>
-          <Image source={{ uri: avatarUri }} style={styles.avatar} />
-          <View style={styles.featureCopy}>
-            <Text style={styles.featureTitle} numberOfLines={1}>
-              {displayName}
-            </Text>
-            <Text style={styles.featureSubtitle} numberOfLines={2}>
-              Resident access is active for alerts, safety coordination, and emergency guidance.
-            </Text>
-          </View>
-          <View style={styles.featureArrow}>
-            <Ionicons name="chevron-forward" size={18} color="#355A2C" />
-          </View>
-        </View>
-
         <ScrollView
-          style={styles.menuScroll}
-          contentContainerStyle={styles.menuContent}
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.tileGrid}>
-            {PRIMARY_TILES.map((item) => (
-              <TouchableOpacity
-                key={`tile-${item.label}`}
-                style={styles.tile}
-                onPress={() => goTo(item.route, item.params)}
-                activeOpacity={0.84}
-              >
-                <View style={styles.tileIcon}>
-                  <Ionicons name={item.icon} size={19} color="#355A2C" />
-                </View>
-                <Text style={styles.tileText}>{item.label}</Text>
-              </TouchableOpacity>
-            ))}
+          <TouchableOpacity
+            style={styles.profileCard}
+            activeOpacity={0.88}
+            onPress={() => goTo("Profile")}
+          >
+            <Image source={{ uri: avatarUri }} style={styles.avatar} />
+            <View style={styles.profileCopy}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text style={styles.profileSub} numberOfLines={2}>
+                Open profile and account settings.
+              </Text>
+            </View>
+            <View style={styles.profileArrow}>
+              <Ionicons name="chevron-forward" size={18} color="#355A2C" />
+            </View>
+          </TouchableOpacity>
+
+      
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <View style={styles.quickGrid}>
+              {QUICK_ACTIONS.map((item) => (
+                <TouchableOpacity
+                  key={item.label}
+                  style={styles.quickCard}
+                  onPress={() => goTo(item.route, item.params)}
+                  activeOpacity={0.86}
+                >
+                  <View style={styles.quickIconWrap}>
+                    <Ionicons name={item.icon} size={21} color="#1F4D36" />
+                  </View>
+                  <Text style={styles.quickLabel}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
 
-          {MENU_GROUPS.map((group) => (
-            <View key={group.title} style={styles.group}>
-              <Text style={styles.groupTitle}>{group.title}</Text>
-              {group.items.map((item) => (
-                <DrawerItem
-                  key={`${group.title}-${item.label}`}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Resources</Text>
+            <View style={styles.listGroup}>
+              {RESOURCE_ITEMS.map((item, index) => (
+                <DrawerRow
+                  key={item.label}
                   icon={item.icon}
                   label={item.label}
+                  isLast={index === RESOURCE_ITEMS.length - 1}
                   onPress={() => goTo(item.route, item.params)}
                 />
               ))}
             </View>
-          ))}
-        </ScrollView>
+          </View>
 
-        <View style={styles.logoutSection}>
-          <TouchableOpacity style={styles.logout} onPress={handleLogout} activeOpacity={0.84}>
-            <View style={styles.logoutIcon}>
-              <Ionicons name="log-out-outline" size={18} color="#B91C1C" />
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account and Security</Text>
+            <View style={styles.listGroup}>
+              {ACCOUNT_ITEMS.map((item, index) => (
+                <DrawerRow
+                  key={item.label}
+                  icon={item.icon}
+                  label={item.label}
+                  isLast={index === ACCOUNT_ITEMS.length - 1}
+                  onPress={() => goTo(item.route, item.params)}
+                />
+              ))}
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.logoutRow}
+            onPress={handleLogout}
+            activeOpacity={0.86}
+          >
+            <View style={styles.logoutIconWrap}>
+              <Ionicons name="log-out-outline" size={20} color="#B91C1C" />
             </View>
             <View style={styles.logoutCopy}>
               <Text style={styles.logoutText}>Sign Out</Text>
               <Text style={styles.logoutSub}>End current session</Text>
             </View>
+            <Ionicons name="chevron-forward" size={18} color="#D18181" />
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </Animated.View>
 
       <TouchableOpacity
@@ -226,16 +249,20 @@ export default function AppDrawer({
   );
 }
 
-function DrawerItem({ icon, label, onPress }) {
+function DrawerRow({ icon, label, onPress, isLast = false }) {
   return (
-    <TouchableOpacity style={styles.listItem} onPress={onPress} activeOpacity={0.82}>
-      <View style={styles.iconBox}>
-        <Ionicons name={icon} size={19} color="#355A2C" />
+    <TouchableOpacity
+      style={[styles.rowItem, isLast && styles.rowItemLast]}
+      onPress={onPress}
+      activeOpacity={0.84}
+    >
+      <View style={styles.rowLeft}>
+        <View style={styles.rowIconWrap}>
+          <Ionicons name={icon} size={20} color="#1F4D36" />
+        </View>
+        <Text style={styles.rowLabel}>{label}</Text>
       </View>
-      <View style={styles.itemCopy}>
-        <Text style={styles.itemText}>{label}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={17} color="#7D8B83" />
+      <Ionicons name="chevron-forward" size={18} color="#7A857D" />
     </TouchableOpacity>
   );
 }
@@ -247,221 +274,319 @@ const styles = StyleSheet.create({
     zIndex: 9999,
     elevation: 9999,
   },
+
   drawer: {
     width: DRAWER_WIDTH,
-    backgroundColor: "#F5F7EF",
-    paddingTop: 42,
-    paddingHorizontal: 14,
-    paddingBottom: 18,
-    borderTopRightRadius: 26,
-    borderBottomRightRadius: 26,
+    backgroundColor: "#F6F7F2",
+    paddingTop: 18,
+    borderTopRightRadius: 28,
+    borderBottomRightRadius: 28,
     shadowColor: "#000000",
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.18,
     shadowRadius: 24,
     shadowOffset: { width: 8, height: 0 },
     elevation: 24,
   },
+
   backdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.52)",
+    backgroundColor: "rgba(15,23,42,0.42)",
   },
-  topRow: {
+
+  headerRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
-  brandBlock: {
+
+  headerBrand: {
     flexDirection: "row",
     alignItems: "center",
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
   },
-  brandBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: "#E7F0E2",
-    borderWidth: 1,
-    borderColor: "#D3E0D0",
+
+  headerBadge: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "#E6EFE4",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
-  },
-  brand: {
-    color: "#10251B",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  brandSub: {
-    marginTop: 2,
-    color: "#647067",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  closeBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E1EAE4",
-  },
-  featureCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 14,
-    borderRadius: 22,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E1EAE4",
-    shadowColor: "#0F2319",
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 2,
-  },
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 18,
     marginRight: 12,
-    backgroundColor: "#E5E7EB",
+    borderWidth: 1,
+    borderColor: "#D6E3D2",
   },
-  featureCopy: {
+
+  headerCopy: {
     flex: 1,
     minWidth: 0,
   },
-  featureTitle: {
-    fontSize: 15,
-    fontWeight: "900",
-    color: "#10251B",
+
+  headerEyebrow: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#6B7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 2,
   },
-  featureSubtitle: {
+
+  headerTitle: {
+    fontSize: 30,
+    fontWeight: "900",
+    color: "#163A28",
+  },
+
+  closeBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#E8EBE8",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  scroll: {
+    flex: 1,
+  },
+
+  scrollContent: {
+    paddingHorizontal: 14,
+    paddingBottom: 18,
+  },
+
+  profileCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 14,
+    marginBottom: 14,
+    shadowColor: "#10251B",
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "#E6ECE6",
+  },
+
+  avatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    marginRight: 12,
+    backgroundColor: "#E5E7EB",
+  },
+
+  profileCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  profileName: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#111827",
+  },
+
+  profileSub: {
     marginTop: 3,
     fontSize: 12,
-    color: "#647067",
-    fontWeight: "600",
     lineHeight: 17,
+    color: "#6B7280",
+    fontWeight: "600",
   },
-  featureArrow: {
+
+  profileArrow: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: "#E7F0E2",
+    backgroundColor: "#ECF2E8",
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 10,
   },
-  menuScroll: {
+
+  heroCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0F2E8",
+    borderRadius: 24,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "#DCE4D6",
+    marginBottom: 18,
+  },
+
+  heroIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: "#1F4D36",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+
+  heroCopy: {
     flex: 1,
-    marginTop: 18,
+    minWidth: 0,
+    paddingRight: 8,
   },
-  menuContent: {
-    paddingBottom: 14,
+
+  heroTitle: {
+    fontSize: 17,
+    fontWeight: "900",
+    color: "#163A28",
   },
-  tileGrid: {
+
+  heroSub: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#66756B",
+    fontWeight: "600",
+  },
+
+  section: {
+    marginBottom: 18,
+  },
+
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: "#163A28",
+    marginBottom: 12,
+    paddingHorizontal: 2,
+  },
+
+  quickGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
-    marginBottom: 18,
   },
-  tile: {
+
+  quickCard: {
     width: "48.5%",
-    minHeight: 96,
+    minHeight: 104,
     borderRadius: 22,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E1EAE4",
-    padding: 14,
+    borderColor: "#E6ECE6",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     marginBottom: 10,
     justifyContent: "space-between",
+    shadowColor: "#10251B",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
-  tileIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: "#E7F0E2",
+
+  quickIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: "#EDF3E9",
     alignItems: "center",
     justifyContent: "center",
   },
-  tileText: {
-    color: "#10251B",
+
+  quickLabel: {
+    color: "#111827",
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "800",
     lineHeight: 19,
   },
-  group: {
-    marginBottom: 14,
+
+  listGroup: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#E6ECE6",
+    overflow: "hidden",
   },
-  groupTitle: {
-    marginBottom: 10,
-    paddingHorizontal: 2,
-    color: "#10251B",
-    fontSize: 14,
-    fontWeight: "900",
-  },
-  listItem: {
-    minHeight: 50,
+
+  rowItem: {
+    minHeight: 58,
+    paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: 18,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E1EAE4",
-    paddingHorizontal: 12,
-    marginBottom: 10,
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2EE",
   },
-  iconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 13,
-    backgroundColor: "#E7F0E2",
+
+  rowItemLast: {
+    borderBottomWidth: 0,
+  },
+
+  rowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+
+  rowIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#EEF3EB",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
+    marginRight: 12,
   },
-  itemCopy: {
+
+  rowLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#111827",
+  },
+
+  logoutRow: {
+    minHeight: 58,
+    borderRadius: 18,
+    backgroundColor: "#FFF4F4",
+    borderWidth: 1,
+    borderColor: "#F4D2D2",
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
+
+  logoutIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FDE6E6",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+
+  logoutCopy: {
     flex: 1,
     minWidth: 0,
   },
-  itemText: {
-    fontSize: 14,
-    fontWeight: "900",
-    color: "#10251B",
-  },
-  logoutSection: {
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: "#DDE7DE",
-  },
-  logout: {
-    minHeight: 52,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFF6F6",
-    borderWidth: 1,
-    borderColor: "#F0CACA",
-    borderRadius: 18,
-    paddingHorizontal: 12,
-  },
-  logoutIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    backgroundColor: "#FDE5E5",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-  logoutCopy: {
-    flex: 1,
-  },
+
   logoutText: {
     color: "#B91C1C",
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "900",
   },
+
   logoutSub: {
     marginTop: 2,
     color: "#D18181",

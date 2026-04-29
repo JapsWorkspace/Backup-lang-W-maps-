@@ -4,7 +4,6 @@ import React, {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -36,6 +35,10 @@ const MESSAGE_META = {
     title: "Connection removed",
     icon: "person-remove-outline",
   },
+  connection_left: {
+    title: "Member left",
+    icon: "exit-outline",
+  },
   safety_safe: {
     title: "Marked safe",
     icon: "shield-checkmark-outline",
@@ -43,6 +46,18 @@ const MESSAGE_META = {
   safety_not_safe: {
     title: "Needs help",
     icon: "alert-circle-outline",
+  },
+  nearby_incident: {
+    title: "Nearby incident",
+    icon: "warning-outline",
+    sourceLabel: "Incident Alert",
+    official: true,
+  },
+  nearby_repeated_incident: {
+    title: "Nearby incident warning",
+    icon: "alert-circle-outline",
+    sourceLabel: "Incident Alert",
+    official: true,
   },
   drrmo_guideline: {
     title: "DRRMO guideline uploaded",
@@ -68,7 +83,7 @@ export const NotificationContext = createContext({
 });
 
 function normalizeType(type) {
-  return String(type || "system").toLowerCase();
+  return String(type || "system").toLowerCase().trim();
 }
 
 function normalizeServerNotification(item) {
@@ -86,11 +101,11 @@ function normalizeServerNotification(item) {
   return {
     id: String(item?._id || item?.id || `${type}-${item?.createdAt || Date.now()}`),
     type,
-    title: meta.title,
+    title: item?.title || meta.title,
     message: item?.message || "There is a new safety update.",
-    icon: meta.icon,
-    sourceLabel: meta.sourceLabel || null,
-    official: Boolean(meta.official),
+    icon: item?.icon || meta.icon,
+    sourceLabel: item?.sourceLabel || meta.sourceLabel || null,
+    official: Boolean(item?.official ?? meta.official),
     read: Boolean(item?.read),
     createdAt: item?.createdAt || new Date().toISOString(),
     connectionId,
@@ -109,12 +124,11 @@ export function NotificationProvider({ children }) {
   const [serverNotifications, setServerNotifications] = useState([]);
   const [localNotifications, setLocalNotifications] = useState([]);
   const [notificationsVersion, setNotificationsVersion] = useState(0);
-  const seenGuidelineIds = useRef(new Set());
-  const guidelineSeeded = useRef(false);
 
   const addNotification = useCallback((event) => {
     const type = normalizeType(event?.type);
     const meta = MESSAGE_META[type] || MESSAGE_META.system;
+
     const notification = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       type,
@@ -125,6 +139,14 @@ export function NotificationProvider({ children }) {
       official: Boolean(event?.official ?? meta.official),
       read: false,
       createdAt: new Date().toISOString(),
+      connectionId: event?.connectionId || null,
+      actorUserId: event?.actorUserId || null,
+      actorName: event?.actorName || "",
+      actorUsername: event?.actorUsername || "",
+      actorAvatar: event?.actorAvatar || "",
+      connectionCode: event?.connectionCode || "",
+      actionable: Boolean(event?.actionable),
+      handledAt: event?.handledAt || null,
     };
 
     setLocalNotifications((prev) => [notification, ...prev].slice(0, 30));
@@ -138,56 +160,15 @@ export function NotificationProvider({ children }) {
 
     try {
       const res = await api.get(`/user/${user._id}/notifications`);
-      const items = Array.isArray(res.data) ? res.data.map(normalizeServerNotification) : [];
+      const items = Array.isArray(res.data)
+        ? res.data.map(normalizeServerNotification)
+        : [];
       setServerNotifications(items);
       setNotificationsVersion((prev) => prev + 1);
     } catch (err) {
       console.log("[notifications] fetch failed:", err?.message);
     }
   }, [user?._id]);
-
-  const syncGuidelineNotifications = useCallback(async () => {
-    try {
-      const res = await api.get("/api/guidelines");
-      const guidelines = Array.isArray(res.data) ? res.data : [];
-      const published = guidelines.filter(
-        (item) => String(item.status || "published").toLowerCase() === "published"
-      );
-
-      const incomingIds = published
-        .map((item) => guidelineNotificationKey(item))
-        .filter(Boolean);
-
-      if (!guidelineSeeded.current) {
-        seenGuidelineIds.current = new Set(incomingIds);
-        guidelineSeeded.current = true;
-        return;
-      }
-
-      const newGuidelines = published.filter((item) => {
-        const key = guidelineNotificationKey(item);
-        return key && !seenGuidelineIds.current.has(key);
-      });
-
-      newGuidelines
-        .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
-        .slice(-3)
-        .forEach((item) => {
-          const key = guidelineNotificationKey(item);
-          seenGuidelineIds.current.add(key);
-          addNotification({
-            type: "drrmo_guideline",
-            message: `A new emergency guideline has been posted by DRRMO: ${
-              item.title || "Untitled guideline"
-            }.`,
-          });
-        });
-
-      incomingIds.forEach((id) => seenGuidelineIds.current.add(id));
-    } catch (err) {
-      // Guideline notifications should never block the app shell.
-    }
-  }, [addNotification]);
 
   useEffect(() => {
     refreshNotifications();
@@ -198,14 +179,12 @@ export function NotificationProvider({ children }) {
   }, [user?._id]);
 
   useEffect(() => {
-    syncGuidelineNotifications();
     const interval = setInterval(() => {
-      syncGuidelineNotifications();
       refreshNotifications();
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [refreshNotifications, syncGuidelineNotifications]);
+  }, [refreshNotifications]);
 
   const markAllRead = useCallback(async () => {
     setLocalNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
@@ -290,8 +269,4 @@ export function NotificationProvider({ children }) {
       {children}
     </NotificationContext.Provider>
   );
-}
-
-function guidelineNotificationKey(item) {
-  return item?._id || item?.id || `${item?.title || "guideline"}-${item?.createdAt || ""}`;
 }

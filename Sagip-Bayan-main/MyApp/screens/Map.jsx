@@ -12,6 +12,7 @@ import {
   Dimensions,
   Image,
   KeyboardAvoidingView,
+  Modal,
   PanResponder,
   Platform,
   ScrollView,
@@ -31,10 +32,11 @@ import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 
-import api from "../lib/api";
+import api, { uploadSingleFile } from "../lib/api";
 import JaenWeatherForecast from "./components/JaenWeatherForecast";
 import { UserContext } from "./UserContext";
 import { MapContext } from "./contexts/MapContext";
+import { ThemeContext } from "./contexts/ThemeContext";
 import useRouting from "./hooks/useRouting";
 import useHazardLayers, { FLOOD_STYLES } from "./hooks/useHazardLayers";
 import { PillMarker } from "./MapIcon";
@@ -47,6 +49,7 @@ import {
   normalizeCoordinate,
   sanitizeIncidentDescription,
   sanitizeIncidentLocation,
+  sanitizeIncidentText,
   safeDisplayText,
   toNumber,
 } from "./utils/validation";
@@ -60,6 +63,7 @@ const EDGE_PADDING = {
 
 const NAV_ZOOM = 18.5;
 const NAV_PITCH = 55;
+const NAV_CAMERA_THROTTLE_MS = 900;
 
 const JAEN_INITIAL_REGION = {
   latitude: 15.32,
@@ -73,10 +77,21 @@ const USER_POS = {
   longitude: 120.91,
 };
 
+
 const SCREEN_HEIGHT = Dimensions.get("window").height;
-const PANEL_MIN_OFFSET = -SCREEN_HEIGHT * 0.05;
-const PANEL_DEFAULT_OFFSET = 128;
-const PANEL_MAX_OFFSET = 148;
+const PANEL_MIN_OFFSET = 0;
+const PANEL_DEFAULT_OFFSET = 300;
+const PANEL_MAX_OFFSET = 560;
+const NAV_PANEL_HEIGHT = Math.min(Math.max(SCREEN_HEIGHT * 0.34, 260), 310);
+const NAV_PANEL_PEEK_HEIGHT = 82;
+const NAV_PANEL_EXPANDED_OFFSET = 0;
+const NAV_PANEL_COLLAPSED_OFFSET = Math.max(
+  132,
+  Math.round(NAV_PANEL_HEIGHT - NAV_PANEL_PEEK_HEIGHT)
+);
+const NAV_PANEL_HALF_OFFSET = Math.round(NAV_PANEL_COLLAPSED_OFFSET / 2);
+const NAV_PANEL_DEFAULT_OFFSET = NAV_PANEL_HALF_OFFSET;
+const NAV_PANEL_MAX_OFFSET = NAV_PANEL_COLLAPSED_OFFSET;
 
 const MODULES = [
   { key: "incident", label: "Incident" },
@@ -93,12 +108,117 @@ const INCIDENT_LEVEL_COLOR = {
   low: "#16a34a",
 };
 
+function normalizeIncidentStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function getIncidentImages(incident) {
+  const images = Array.isArray(incident?.images) ? incident.images : [];
+  const legacy = incident?.image?.fileUrl ? [incident.image] : [];
+  return [...images, ...legacy].filter((item, index, arr) => {
+    const url = item?.fileUrl;
+    return url && arr.findIndex((candidate) => candidate?.fileUrl === url) === index;
+  });
+}
+
+function getHeatStyle(count, maxCount, selected) {
+  if (!count || !maxCount) {
+    return {
+      strokeColor: selected ? "#FACC15" : null,
+      fillColor: null,
+      strokeWidth: selected ? 3.5 : 1.65,
+      glow: false,
+    };
+  }
+
+  const ratio = Math.min(1, count / maxCount);
+  const alpha = 0.12 + ratio * 0.48;
+  const green = Math.round(185 - ratio * 165);
+  const blue = Math.round(160 - ratio * 145);
+  const red = ratio >= 1 ? 255 : Math.round(185 + ratio * 70);
+  const strokeColor = ratio >= 1 ? "#FF1F1F" : `rgb(${red}, ${green}, ${blue})`;
+
+  return {
+    strokeColor: selected ? "#FACC15" : strokeColor,
+    fillColor: `rgba(${red}, ${green}, ${blue}, ${alpha})`,
+    strokeWidth: selected ? 3.5 : ratio > 0.65 ? 3 : 2,
+    glow: ratio >= 0.6,
+  };
+}
+
 const EVAC_STATUS_COLORS = {
   available: "#16a34a",
   limited: "#facc15",
   full: "#dc2626",
 };
+const DISTRICT_OPTIONS = [
+  "District 1",
+  "District 2",
+  "District 3",
+  "District 4",
+];
 
+const BARANGAY_BY_DISTRICT = {
+  "District 1": [
+    "Bagong Sikat",
+    "Balbalino",
+    "Banganan",
+    "Langla",
+    "Mabini",
+    "Maligaya",
+    "Santo Tomas South",
+  ],
+  "District 2": [
+    "Imbunia",
+    "Lambakin",
+    "Marawa",
+    "Naglabrahan",
+    "San Josef",
+    "San Roque",
+    "Santo Tomas North",
+  ],
+  "District 3": [
+    "Don Mariano Marcos",
+    "Hilera",
+    "Pinanggaan",
+    "San Andres",
+    "San Nicolas",
+    "Ulanin-Pitak",
+  ],
+  "District 4": [
+    "Calabasa",
+    "Kasanglayan",
+    "Pamacpacan",
+    "Putlod",
+    "Sapang",
+  ],
+};
+function getDistrictFromBarangay(barangayName) {
+  const normalized = String(barangayName || "").trim().toLowerCase();
+
+  for (const [district, barangays] of Object.entries(BARANGAY_BY_DISTRICT)) {
+    const match = barangays.some(
+      (item) => String(item || "").trim().toLowerCase() === normalized
+    );
+
+    if (match) return district;
+  }
+
+  return "";
+}
+function sanitizeStreetDetails(value) {
+  return sanitizeIncidentText(value, 160).trimStart();
+}
+
+function buildIncidentAddress({ district, barangay, street, location }) {
+  if (street || barangay || district) {
+    return [street, barangay, district, "Jaen, Nueva Ecija"]
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  return sanitizeIncidentLocation(location);
+}
 const FLOOD_LEGEND_ITEMS = [
   {
     key: "susceptible",
@@ -120,6 +240,9 @@ const FLOOD_LEGEND_ITEMS = [
 const EMPTY_INCIDENT = {
   type: "",
   level: "",
+  district: "",
+  barangay: "",
+  street: "",
   location: "",
   latitude: null,
   longitude: null,
@@ -354,6 +477,84 @@ function distance(a, b) {
   return dx * dx + dy * dy;
 }
 
+function getNearestRouteProgress(routeCoords, location = USER_POS) {
+  const coords = safeArray(routeCoords).filter((coord) =>
+    isValidCoordinate(coord?.latitude, coord?.longitude)
+  );
+
+  if (!coords.length) {
+    return {
+      snappedLocation: location,
+      nextPoint: null,
+      index: 0,
+      heading: 0,
+    };
+  }
+
+  let nearestIdx = 0;
+  let minDist = Infinity;
+
+  coords.forEach((coord, index) => {
+    const currentDistance = distance(location, coord);
+    if (currentDistance < minDist) {
+      minDist = currentDistance;
+      nearestIdx = index;
+    }
+  });
+
+  const snappedLocation = coords[nearestIdx] || location;
+  const nextPoint =
+    coords[Math.min(nearestIdx + 1, coords.length - 1)] ||
+    coords[Math.max(nearestIdx - 1, 0)] ||
+    snappedLocation;
+
+  return {
+    snappedLocation,
+    nextPoint,
+    index: nearestIdx,
+    heading:
+      nextPoint && nextPoint !== snappedLocation
+        ? getHeading(snappedLocation, nextPoint)
+        : 0,
+  };
+}
+
+function getNavigationRouteCoords(routeCoords, location = USER_POS) {
+  const coords = safeArray(routeCoords).filter((coord) =>
+    isValidCoordinate(coord?.latitude, coord?.longitude)
+  );
+  if (coords.length < 2) return coords;
+
+  const { snappedLocation, index } = getNearestRouteProgress(coords, location);
+  return [snappedLocation, ...coords.slice(Math.min(index + 1, coords.length - 1))];
+}
+
+function getNearestSnapPoint(value, snapPoints) {
+  return snapPoints.reduce((nearest, point) =>
+    Math.abs(point - value) < Math.abs(nearest - value) ? point : nearest
+  );
+}
+
+function distanceKm(a, b) {
+  if (
+    !isValidCoordinate(a?.latitude, a?.longitude) ||
+    !isValidCoordinate(b?.latitude, b?.longitude)
+  ) {
+    return null;
+  }
+
+  const earthRadiusKm = 6371;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
 function normalizePlace(place) {
   if (!place || typeof place !== "object") return null;
   if (
@@ -397,17 +598,54 @@ function normalizePlace(place) {
 }
 
 function toMarkerCoordinate(value) {
-  return normalizeCoordinate(value);
+  const normalized = normalizeCoordinate(value);
+
+  if (
+    !normalized ||
+    typeof normalized.latitude !== "number" ||
+    typeof normalized.longitude !== "number" ||
+    !Number.isFinite(normalized.latitude) ||
+    !Number.isFinite(normalized.longitude)
+  ) {
+    return null;
+  }
+
+  return {
+    latitude: Number(normalized.latitude),
+    longitude: Number(normalized.longitude),
+  };
 }
 
 function SafeMarker({ coordinate, children, ...props }) {
   const safeCoordinate = toMarkerCoordinate(coordinate);
-  if (!safeCoordinate) return null;
+
+  if (
+    !safeCoordinate ||
+    !isValidCoordinate(safeCoordinate.latitude, safeCoordinate.longitude)
+  ) {
+    return null;
+  }
 
   return (
     <Marker coordinate={safeCoordinate} {...props}>
       {children}
     </Marker>
+  );
+}
+
+function NavigationArrowMarker({ heading = 0 }) {
+  return (
+    <View style={styles.navigationArrowShell} collapsable={false}>
+      <View
+        style={[
+          styles.navigationArrow,
+          { transform: [{ rotate: `${Math.round(heading || 0)}deg` }] },
+        ]}
+      >
+        <Ionicons name="navigate" size={28} color="#FFFFFF" />
+      </View>
+      <View style={styles.navigationArrowHalo} />
+    </View>
   );
 }
 
@@ -589,6 +827,13 @@ function EvacuationPlaceMarker({ color, selected = false, label }) {
 function IncidentListItem({ incident }) {
   const level = String(incident?.level || "low").toLowerCase();
   const levelColor = INCIDENT_LEVEL_COLOR[level] || "#16a34a";
+  const images = getIncidentImages(incident);
+
+  useEffect(() => {
+    images.slice(0, 2).forEach((item) => {
+      if (item?.fileUrl) Image.prefetch(item.fileUrl).catch(() => {});
+    });
+  }, [images]);
 
   return (
     <View style={styles.incidentListItem}>
@@ -605,6 +850,18 @@ function IncidentListItem({ incident }) {
             {safeDisplayText(incident.description, "No description")}
           </Text>
         )}
+        {images.length > 0 && (
+          <View style={styles.incidentPhotoRow}>
+            {images.slice(0, 2).map((image, index) => (
+              <Image
+                key={`${image.fileUrl}-${index}`}
+                source={{ uri: image.fileUrl }}
+                style={styles.incidentPhotoThumb}
+                resizeMode="cover"
+              />
+            ))}
+          </View>
+        )}
       </View>
       <View style={[styles.incidentLevelChip, { borderColor: levelColor }]}>
         <Text style={[styles.incidentLevelText, { color: levelColor }]}>
@@ -613,8 +870,47 @@ function IncidentListItem({ incident }) {
       </View>
     </View>
   );
-}
+}function IncidentMapMarker({ level = "critical" }) {
+  const markerColor =
+    INCIDENT_LEVEL_COLOR[String(level || "critical").toLowerCase()] || "#dc2626";
 
+  return (
+    <View style={{ alignItems: "center" }} collapsable={false}>
+      <View
+        style={{
+          minWidth: 34,
+          height: 34,
+          paddingHorizontal: 8,
+          borderRadius: 17,
+          backgroundColor: "#ffffff",
+          borderWidth: 2,
+          borderColor: markerColor,
+          alignItems: "center",
+          justifyContent: "center",
+          shadowColor: "#000",
+          shadowOpacity: 0.16,
+          shadowRadius: 6,
+          shadowOffset: { width: 0, height: 2 },
+          elevation: 5,
+        }}
+      >
+        <Ionicons name="warning" size={16} color={markerColor} />
+      </View>
+
+      <View
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: 5,
+          backgroundColor: markerColor,
+          marginTop: -3,
+          borderWidth: 2,
+          borderColor: "#ffffff",
+        }}
+      />
+    </View>
+  );
+}
 function renderBoundary(data, stylePrefix, strokeColor, strokeWidth, fillColor) {
   return safeFeatures(data).flatMap((feature, idx) => {
     const geom = feature?.geometry;
@@ -774,6 +1070,11 @@ function getBoundaryHoles(data) {
       .filter((coords) => coords.length > 2);
   });
 }
+function isPointInsideJaenBoundary(point) {
+  return safeFeatures(jaenGeoJSON).some((feature) =>
+    isPointInBarangay(point, feature)
+  );
+}
 
 export default function Map() {
   const mapRef = useRef(null);
@@ -781,40 +1082,56 @@ export default function Map() {
   const navRoute = useRoute();
   const lastPlaceKeyRef = useRef(null);
   const { user } = useContext(UserContext) || {};
+  const { theme } = useContext(ThemeContext);
 
   const [mongoBarangays, setMongoBarangays] = useState(null);
   const [incidentDraft, setIncidentDraft] = useState(EMPTY_INCIDENT);
   const [incidentImage, setIncidentImage] = useState(null);
   const [incidentImageError, setIncidentImageError] = useState("");
+  const [incidentErrors, setIncidentErrors] = useState({});
   const [incidentBusy, setIncidentBusy] = useState(false);
   const [incidentLocating, setIncidentLocating] = useState(false);
-  const [mapWeather, setMapWeather] = useState(null);
-  const [fogPulseLevel, setFogPulseLevel] = useState(0.65);
-  const [selectedBarangay, setSelectedBarangay] = useState(null);
+const [mapWeather, setMapWeather] = useState(null);
+const [fogPulseLevel, setFogPulseLevel] = useState(0.65);
+const [selectedBarangay, setSelectedBarangay] = useState(null);
+const [showIncidentMarkers, setShowIncidentMarkers] = useState(false);
+const [showBarangayMarkers, setShowBarangayMarkers] = useState(false);
+const [incidentDebugMode, setIncidentDebugMode] = useState(false);
 
-  const {
-    activeMapModule,
-    setActiveMapModule,
-    panelState,
-    setPanelState,
-    panelY,
-    setPanelY,
-    evac,
-    setEvac,
-    evacPlaces,
-    routeRequested,
-    setRouteRequested,
-    routes,
-    setRoutes,
-    setActiveRoute,
-    travelMode,
-    setTravelMode,
-    incidents = [],
-    setShowFloodMap,
-    setShowEarthquakeHazard,
-    isBottomNavInteracting,
-  } = useContext(MapContext);
+const {
+  activeMapModule,
+  setActiveMapModule,
+  panelState,
+  setPanelState,
+  panelY,
+  setPanelY,
+  evac,
+  setEvac,
+  evacPlaces,
+  routeRequested,
+  setRouteRequested,
+  routes,
+  setRoutes,
+  activeRoute,
+  setActiveRoute,
+  travelMode,
+  setTravelMode,
+  incidents = [],
+  setIncidents,
+  setShowFloodMap,
+  setShowEarthquakeHazard,
+  isBottomNavInteracting,
+} = useContext(MapContext);
+
   const isClampingRegionRef = useRef(false);
+  const recentModuleChangeRef = useRef(Date.now());
+  const lastNavigationCameraAtRef = useRef(0);
+  const recenterTimerRef = useRef(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [followMode, setFollowMode] = useState(false);
+  const [currentHeading, setCurrentHeading] = useState(0);
+  const [currentLocation, setCurrentLocation] = useState(USER_POS);
+  const [nextRoutePoint, setNextRoutePoint] = useState(null);
 
   const requestedModule = MODULES.some((item) => item.key === navRoute.params?.module)
     ? navRoute.params.module
@@ -826,8 +1143,14 @@ export default function Map() {
   const isFlood = activeModule === "flood";
   const isEarthquake = activeModule === "earthquake";
   const isBarangay = activeModule === "barangay";
-  const showHomepageBarangays = !activeModule || isIncident;
-  const showBarangayNameMarkers = showHomepageBarangays || isBarangay;
+
+  useEffect(() => {
+    recentModuleChangeRef.current = Date.now();
+  }, [activeModule, panelState]);
+
+  const showHomepageBarangays = !activeModule || isIncident || isEvac;
+  const showBarangayNameMarkers =
+    showBarangayMarkers && (showHomepageBarangays || isBarangay || isEvac);
 
   const normalizedEvacPlaces = useMemo(
     () =>
@@ -847,6 +1170,7 @@ export default function Map() {
   const normalizedIncidents = useMemo(
     () =>
       safeArray(incidents)
+        .filter((incident) => normalizeIncidentStatus(incident?.status) === "accepted")
         .map((incident) => {
           const latitude = toNumber(
             incident?.latitude ?? incident?.lat ?? incident?.location?.lat
@@ -868,7 +1192,6 @@ export default function Map() {
         .filter(Boolean),
     [incidents]
   );
-
   const { floodLayers, earthquakeLayer } = useHazardLayers({
     showFloodMap: isFlood,
     showEarthquakeHazard: isEarthquake,
@@ -983,6 +1306,141 @@ export default function Map() {
     incidents: normalizedIncidents,
   });
 
+  const activeNavigationRoute = useMemo(
+    () => activeRoute || routes[0] || null,
+    [activeRoute, routes]
+  );
+
+  const updateNavigationCamera = useCallback(
+    (force = false) => {
+      if (
+        !isEvac ||
+        !isNavigating ||
+        (!followMode && !force) ||
+        isBottomNavInteracting ||
+        !activeNavigationRoute?.coords?.length
+      ) {
+        return;
+      }
+
+      const coords = safeArray(activeNavigationRoute.coords).filter((coord) =>
+        isValidCoordinate(coord?.latitude, coord?.longitude)
+      );
+
+      if (coords.length < 2) return;
+
+      const rawLocation = isValidCoordinate(
+        currentLocation?.latitude,
+        currentLocation?.longitude
+      )
+        ? currentLocation
+        : USER_POS;
+      const { snappedLocation, nextPoint, heading } = getNearestRouteProgress(
+        coords,
+        rawLocation
+      );
+      const now = Date.now();
+
+      setCurrentLocation((previous) =>
+        previous?.latitude === snappedLocation.latitude &&
+        previous?.longitude === snappedLocation.longitude
+          ? previous
+          : snappedLocation
+      );
+      setNextRoutePoint(nextPoint);
+      setCurrentHeading(heading);
+
+      if (!force && now - lastNavigationCameraAtRef.current < NAV_CAMERA_THROTTLE_MS) {
+        return;
+      }
+
+      lastNavigationCameraAtRef.current = now;
+      mapRef.current?.animateCamera(
+        {
+          center: snappedLocation,
+          heading,
+          zoom: NAV_ZOOM,
+          pitch: NAV_PITCH,
+        },
+        { duration: force ? 450 : 700 }
+      );
+    },
+    [
+      activeNavigationRoute,
+      currentLocation,
+      followMode,
+      isBottomNavInteracting,
+      isEvac,
+      isNavigating,
+    ]
+  );
+
+  const recenterNavigationCamera = useCallback(() => {
+    if (!isEvac || !isNavigating || !activeNavigationRoute?.coords?.length) {
+      return;
+    }
+
+    setFollowMode(true);
+    updateNavigationCamera(true);
+  }, [activeNavigationRoute, isEvac, isNavigating, updateNavigationCamera]);
+
+  const pauseFollowForManualPan = useCallback(() => {
+    if (!isEvac || !isNavigating) return;
+
+    setFollowMode(false);
+
+    if (recenterTimerRef.current) {
+      clearTimeout(recenterTimerRef.current);
+    }
+
+    recenterTimerRef.current = setTimeout(() => {
+      recenterNavigationCamera();
+    }, 10000);
+  }, [isEvac, isNavigating, recenterNavigationCamera]);
+
+  useEffect(() => {
+    return () => {
+      if (recenterTimerRef.current) {
+        clearTimeout(recenterTimerRef.current);
+      }
+    };
+  }, []);
+
+  const resetNavigationCamera = useCallback(() => {
+    mapRef.current?.animateCamera(
+      {
+        center: USER_POS,
+        heading: 0,
+        pitch: 0,
+        zoom: 14,
+      },
+      { duration: 450 }
+    );
+  }, []);
+
+  const startNavigationCamera = useCallback((route) => {
+    const coords = safeArray(route?.coords).filter((coord) =>
+      isValidCoordinate(coord?.latitude, coord?.longitude)
+    );
+    const { snappedLocation, nextPoint, heading } = getNearestRouteProgress(
+      coords,
+      USER_POS
+    );
+
+    lastNavigationCameraAtRef.current = Date.now();
+    mapRef.current?.animateCamera(
+      {
+        center: snappedLocation,
+        heading,
+        zoom: NAV_ZOOM,
+        pitch: NAV_PITCH,
+      },
+      { duration: 450 }
+    );
+
+    return { heading, nextPoint, snappedLocation };
+  }, []);
+
   useEffect(() => {
     if (!routeRequested || !routing.routes?.length) return;
 
@@ -998,47 +1456,13 @@ export default function Map() {
   }, [panelState, routeRequested, routing.routes, setActiveRoute, setRoutes]);
 
   useEffect(() => {
-    if (
-      !isEvac ||
-      panelState !== "NAVIGATION" ||
-      !routes.length ||
-      isBottomNavInteracting
-    ) {
-      return;
-    }
+    if (!isNavigating || !followMode) return undefined;
 
-    const primaryRoute = routes[0];
-    if (!Array.isArray(primaryRoute?.coords) || primaryRoute.coords.length < 2) {
-      return;
-    }
+    updateNavigationCamera(true);
+    const intervalId = setInterval(() => updateNavigationCamera(false), 1200);
 
-    let nearestIdx = 0;
-    let minDist = Infinity;
-
-    primaryRoute.coords.forEach((coord, index) => {
-      if (index >= primaryRoute.coords.length - 1) return;
-      const currentDistance = distance(USER_POS, coord);
-      if (currentDistance < minDist) {
-        minDist = currentDistance;
-        nearestIdx = index;
-      }
-    });
-
-    const heading = getHeading(
-      primaryRoute.coords[nearestIdx],
-      primaryRoute.coords[Math.min(nearestIdx + 1, primaryRoute.coords.length - 1)]
-    );
-
-    mapRef.current?.animateCamera(
-      {
-        center: USER_POS,
-        heading,
-        zoom: NAV_ZOOM,
-        pitch: NAV_PITCH,
-      },
-      { duration: 700 }
-    );
-  }, [isBottomNavInteracting, isEvac, panelState, routes]);
+    return () => clearInterval(intervalId);
+  }, [followMode, isNavigating, updateNavigationCamera]);
 
   const jaenBoundary = useMemo(
     () => renderBoundary(jaenGeoJSON, "jaen", "#065F46", 2.5, "transparent"),
@@ -1151,42 +1575,43 @@ export default function Map() {
 
   const displayedBarangayCount =
     safeFeatures(mongoBarangays).length || safeFeatures(areasData).length;
+const homepageBarangays = useMemo(() => {
+  const features = safeFeatures(mongoBarangays).length
+    ? safeFeatures(mongoBarangays)
+    : safeFeatures(areasData);
 
-  const homepageBarangays = useMemo(() => {
-    const features = safeFeatures(mongoBarangays).length
-      ? safeFeatures(mongoBarangays)
-      : safeFeatures(areasData);
-    const totalFeatures = features.length;
+  const totalFeatures = features.length;
 
-    return features
-      .map((feature, index) => {
-        const mainRing = getFeatureMainRing(feature);
-        const center = getBarangayLabelCoordinate(feature, mainRing);
-        const label = getBarangayLabel(feature, index);
+  return features
+    .map((feature, index) => {
+      const mainRing = getFeatureMainRing(feature);
+      const rawCenter = getBarangayLabelCoordinate(feature, mainRing);
+      const center = toMarkerCoordinate(rawCenter);
+      const label = getBarangayLabel(feature, index);
 
-        if (!mainRing.length || !center) return null;
+      if (!mainRing.length || !center) return null;
 
-        return {
-          id: String(
-            feature?._id ||
+      return {
+        id: String(
+          feature?._id ||
             feature?.properties?._id ||
             feature?.properties?.id ||
             `${label}-${index}`
-          ),
-          label,
-          feature,
-          index,
-          center,
-          mainRing,
-          color: getBarangayOutlineColor(index, totalFeatures),
-          fillColor: getBarangaySoftFillColor(index, totalFeatures),
-        };
-      })
-      .filter(Boolean);
-  }, [mongoBarangays]);
+        ),
+        label,
+        feature,
+        index,
+        center,
+        mainRing,
+        color: getBarangayOutlineColor(index, totalFeatures),
+        fillColor: getBarangaySoftFillColor(index, totalFeatures),
+      };
+    })
+    .filter(Boolean);
+}, [mongoBarangays]);
 
   const incidentBarangayCounts = useMemo(() => {
-    const counts = {};
+    const stats = {};
 
     normalizedIncidents.forEach((incident) => {
       const point = { latitude: incident.latitude, longitude: incident.longitude };
@@ -1195,77 +1620,187 @@ export default function Map() {
       );
 
       if (match) {
-        counts[match.id] = (counts[match.id] || 0) + 1;
+        if (!stats[match.id]) {
+          stats[match.id] = { count: 0, typeCounts: {} };
+        }
+        stats[match.id].count += 1;
+        const type = safeDisplayText(incident?.type, "Incident");
+        stats[match.id].typeCounts[type] = (stats[match.id].typeCounts[type] || 0) + 1;
       }
     });
 
-    return counts;
+    return Object.fromEntries(
+      Object.entries(stats).map(([id, stat]) => {
+        const topType =
+          Object.entries(stat.typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+          "Incident";
+        return [id, { ...stat, topType }];
+      })
+    );
   }, [homepageBarangays, normalizedIncidents]);
 
-  const selectedBarangayIncidents = useMemo(() => {
-    if (!selectedBarangay) return normalizedIncidents;
+  const maxBarangayIncidentCount = useMemo(
+    () =>
+      Math.max(
+        0,
+        ...Object.values(incidentBarangayCounts).map((item) => Number(item?.count || 0))
+      ),
+    [incidentBarangayCounts]
+  );
 
-    const normalizedLabel = String(selectedBarangay.label || "").toLowerCase();
+const selectedBarangayIncidents = useMemo(() => {
+  if (!selectedBarangay) return normalizedIncidents;
 
-    return normalizedIncidents.filter((incident) => {
-      const point = { latitude: incident.latitude, longitude: incident.longitude };
-      if (isPointInBarangay(point, selectedBarangay.feature)) return true;
+  const normalizedLabel = String(selectedBarangay.label || "").trim().toLowerCase();
 
-      const locationText = String(incident?.location || "").toLowerCase();
-      return normalizedLabel && locationText.includes(normalizedLabel);
-    });
-  }, [normalizedIncidents, selectedBarangay]);
+  return normalizedIncidents.filter((incident) => {
+    const point = {
+      latitude: incident.latitude,
+      longitude: incident.longitude,
+    };
+
+    if (isPointInBarangay(point, selectedBarangay.feature)) {
+      return true;
+    }
+
+    const incidentBarangay = String(incident?.barangay || "").trim().toLowerCase();
+    const locationText = String(incident?.location || "").trim().toLowerCase();
+
+    return (
+      normalizedLabel &&
+      (incidentBarangay === normalizedLabel || locationText.includes(normalizedLabel))
+    );
+  });
+}, [normalizedIncidents, selectedBarangay]);
 
   const handleWeatherChange = useCallback((nextWeather) => {
     setMapWeather(nextWeather);
   }, []);
 
-  const handleSelectBarangay = useCallback(
-    (barangay) => {
-      if (!barangay?.mainRing?.length) return;
+const handleSelectBarangay = useCallback(
+  (barangay) => {
+    if (!barangay?.mainRing?.length) return;
 
-      setSelectedBarangay(barangay);
-      if (!activeModule) {
-        setActiveMapModule("incident");
-      }
-      setPanelY(null);
+    const nextBarangay = String(barangay.label || "").trim();
+    const nextDistrict = getDistrictFromBarangay(nextBarangay);
 
-      mapRef.current?.fitToCoordinates(barangay.mainRing, {
-        edgePadding: {
-          top: 150,
-          bottom: 360,
-          left: 46,
-          right: 46,
-        },
-        animated: true,
-      });
-    },
-    [activeModule, setActiveMapModule, setPanelY]
-  );
+    setSelectedBarangay(barangay);
 
+    if (!activeModule) {
+      setActiveMapModule("incident");
+    }
+
+    setIncidentDraft((prev) => ({
+      ...prev,
+      district: nextDistrict || "",
+      barangay: nextBarangay || "",
+    }));
+
+    setPanelY(null);
+
+    mapRef.current?.fitToCoordinates(barangay.mainRing, {
+      edgePadding: {
+        top: 150,
+        bottom: 360,
+        left: 46,
+        right: 46,
+      },
+      animated: true,
+    });
+  },
+  [activeModule, setActiveMapModule, setPanelY]
+);
   const clearSelectedBarangay = useCallback(() => {
     setSelectedBarangay(null);
     mapRef.current?.animateToRegion(JAEN_INITIAL_REGION, 260);
   }, []);
 
-  const selectedIncidentCoordinate = useMemo(() => {
-    if (!isValidCoordinate(incidentDraft.latitude, incidentDraft.longitude)) {
-      return null;
-    }
+ const selectedIncidentCoordinate = useMemo(() => {
+  const latitude = toNumber(incidentDraft.latitude);
+  const longitude = toNumber(incidentDraft.longitude);
 
-    return {
-      latitude: toNumber(incidentDraft.latitude),
-      longitude: toNumber(incidentDraft.longitude),
-    };
-  }, [incidentDraft.latitude, incidentDraft.longitude]);
+  if (!isValidCoordinate(latitude, longitude)) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+  };
+}, [incidentDraft.latitude, incidentDraft.longitude]);
 
   const userCoordinate = useMemo(() => toMarkerCoordinate(USER_POS), []);
   const selectedEvacCoordinate = useMemo(
     () => toMarkerCoordinate(normalizedSelectedEvac),
     [normalizedSelectedEvac]
   );
-  const visibleIncidentMarkers =
-    isIncident && selectedBarangay ? selectedBarangayIncidents : normalizedIncidents;
+const visibleIncidentMarkers = useMemo(() => {
+  if (!(isIncident && selectedBarangay)) return normalizedIncidents;
+
+  return normalizedIncidents.filter((incident) => {
+    const point = {
+      latitude: incident.latitude,
+      longitude: incident.longitude,
+    };
+
+    return isPointInBarangay(point, selectedBarangay.feature);
+  });
+}, [isIncident, normalizedIncidents, selectedBarangay]);
+
+const shouldShowIncidentMarkers =
+  isIncident && showIncidentMarkers && visibleIncidentMarkers.length > 0;
+
+  const incidentPointInsideJaen = useMemo(
+    () =>
+      selectedIncidentCoordinate
+        ? isPointInsideJaenBoundary(selectedIncidentCoordinate)
+        : false,
+    [selectedIncidentCoordinate]
+  );
+
+  const canSubmitIncidentFromLocation = incidentDebugMode || incidentPointInsideJaen;
+
+  const navigationTopSummary = useMemo(() => {
+    const nextKm = distanceKm(currentLocation, nextRoutePoint);
+    const distanceToNextTurn =
+      nextKm == null
+        ? "--"
+        : nextKm < 1
+          ? `${Math.max(10, Math.round(nextKm * 1000))} m`
+          : `${nextKm.toFixed(1)} km`;
+
+    return {
+      instruction: "Continue straight",
+      distanceToNextTurn,
+      roadName:
+        normalizedSelectedEvac?.barangayName ||
+        normalizedSelectedEvac?.location ||
+        "Jaen evacuation route",
+      eta: activeNavigationRoute?.summary?.displayTime || "--",
+      remainingDistance: activeNavigationRoute?.summary?.km
+        ? `${activeNavigationRoute.summary.km} km`
+        : "--",
+      travelModeLabel: travelMode.charAt(0).toUpperCase() + travelMode.slice(1),
+    };
+  }, [activeNavigationRoute, currentLocation, nextRoutePoint, normalizedSelectedEvac, travelMode]);
+
+  const exitNavigationMode = useCallback(() => {
+    setIsNavigating(false);
+    setFollowMode(false);
+    setCurrentLocation(USER_POS);
+    setNextRoutePoint(null);
+    setCurrentHeading(0);
+    setRouteRequested(false);
+    setRoutes([]);
+    setActiveRoute(null);
+    setPanelState("PLACE_INFO");
+    setPanelY(300);
+    resetNavigationCamera();
+    if (recenterTimerRef.current) {
+      clearTimeout(recenterTimerRef.current);
+      recenterTimerRef.current = null;
+    }
+  }, [resetNavigationCamera, setActiveRoute, setPanelState, setPanelY, setRouteRequested, setRoutes]);
 
   const handleBack = useCallback(() => {
     navigation.setParams({
@@ -1278,6 +1813,10 @@ export default function Map() {
     setRouteRequested(false);
     setRoutes([]);
     setActiveRoute(null);
+    setIsNavigating(false);
+    setFollowMode(false);
+    setNextRoutePoint(null);
+    setCurrentHeading(0);
     setActiveMapModule(null);
     setPanelState("HIDDEN");
     setPanelY(null);
@@ -1305,6 +1844,10 @@ export default function Map() {
       setRouteRequested(false);
       setRoutes([]);
       setActiveRoute(null);
+      setIsNavigating(false);
+      setFollowMode(false);
+      setNextRoutePoint(null);
+      setCurrentHeading(0);
 
       mapRef.current?.fitToCoordinates([USER_POS, normalizedPlace], {
         edgePadding: EDGE_PADDING,
@@ -1313,25 +1856,83 @@ export default function Map() {
     },
     [setActiveRoute, setEvac, setPanelState, setPanelY, setRouteRequested, setRoutes]
   );
+  
+ const handleMapPress = useCallback(
+  (event) => {
+    if (!isIncident) return;
 
-  const handleMapPress = useCallback(
-    (event) => {
-      if (!isIncident) return;
+    const now = Date.now();
+    if (now - recentModuleChangeRef.current < 650) return;
 
-      const latitude = toNumber(event?.nativeEvent?.coordinate?.latitude);
-      const longitude = toNumber(event?.nativeEvent?.coordinate?.longitude);
-      if (!isValidCoordinate(latitude, longitude)) return;
+    const latitude = toNumber(event?.nativeEvent?.coordinate?.latitude);
+    const longitude = toNumber(event?.nativeEvent?.coordinate?.longitude);
 
-      setIncidentDraft((prev) => ({
-        ...prev,
-        location: formatCoordinateAddress(latitude, longitude),
+    if (!isValidCoordinate(latitude, longitude)) return;
+
+    const tappedPoint = { latitude, longitude };
+
+    if (!incidentDebugMode && !isPointInsideJaenBoundary(tappedPoint)) {
+      Alert.alert(
+        "Outside Jaen Boundary",
+        "You can only pin and report incidents inside Jaen."
+      );
+      return;
+    }
+
+    let matchedBarangay = homepageBarangays.find((barangay) =>
+      isPointInBarangay(tappedPoint, barangay.feature)
+    );
+
+    if (!matchedBarangay) {
+      matchedBarangay =
+        homepageBarangays
+          .map((barangay) => {
+            const center = barangay?.center;
+            if (!center) return null;
+
+            const dx = center.latitude - latitude;
+            const dy = center.longitude - longitude;
+            const distance = dx * dx + dy * dy;
+
+            return { barangay, distance };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.distance - b.distance)[0]?.barangay || null;
+    }
+
+    const detectedBarangay = matchedBarangay
+      ? String(matchedBarangay.label || "").trim()
+      : "";
+
+    const detectedDistrict = detectedBarangay
+      ? getDistrictFromBarangay(detectedBarangay)
+      : "";
+
+    if (matchedBarangay) {
+      setSelectedBarangay(matchedBarangay);
+    }
+
+    setIncidentDraft((prev) => ({
+      ...prev,
+      district: detectedDistrict,
+      barangay: detectedBarangay,
+      location: formatCoordinateAddress(latitude, longitude),
+      latitude,
+      longitude,
+    }));
+
+    mapRef.current?.animateToRegion(
+      {
         latitude,
         longitude,
-      }));
-    },
-    [isIncident]
-  );
-
+        latitudeDelta: 0.008,
+        longitudeDelta: 0.008,
+      },
+      280
+    );
+  },
+  [homepageBarangays, incidentDebugMode, isIncident]
+);
   const useCurrentIncidentLocation = useCallback(async () => {
     if (incidentLocating) return;
 
@@ -1357,13 +1958,23 @@ export default function Map() {
       const current = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      const latitude = toNumber(current?.coords?.latitude);
-      const longitude = toNumber(current?.coords?.longitude);
 
-      if (!isValidCoordinate(latitude, longitude)) {
-        Alert.alert("Location Unavailable", "We could not read your current location.");
-        return;
-      }
+
+      const latitude = toNumber(current?.coords?.latitude);
+const longitude = toNumber(current?.coords?.longitude);
+
+if (!isValidCoordinate(latitude, longitude)) {
+  Alert.alert("Location Unavailable", "We could not read your current location.");
+  return;
+}
+
+if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
+  Alert.alert(
+    "Outside Jaen Boundary",
+    "Your current location is outside Jaen. You can only report incidents inside Jaen."
+  );
+  return;
+}
 
       let address = formatCoordinateAddress(latitude, longitude, "Current location");
       try {
@@ -1373,12 +1984,12 @@ export default function Map() {
         // Coordinates are enough if reverse geocoding is temporarily unavailable.
       }
 
-      setIncidentDraft((prev) => ({
-        ...prev,
-        location: sanitizeIncidentLocation(address),
-        latitude,
-        longitude,
-      }));
+ setIncidentDraft((prev) => ({
+  ...prev,
+  location: sanitizeIncidentLocation(address),
+  latitude,
+  longitude,
+}));
 
       mapRef.current?.animateToRegion(
         {
@@ -1397,129 +2008,179 @@ export default function Map() {
     } finally {
       setIncidentLocating(false);
     }
-  }, [incidentLocating]);
+  }, [incidentDebugMode, incidentLocating]);
 
   const pickIncidentImage = useCallback(async () => {
     if (Platform.OS === "web") return;
 
     const ImagePicker = await import("expo-image-picker");
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: false,
-      quality: 1,
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: 2,
+      quality: 0.7,
     });
 
     if (result.canceled || !Array.isArray(result.assets) || !result.assets[0]?.uri) {
       return;
     }
 
-    const asset = result.assets[0];
-    const mimeType = asset.mimeType || "image/jpeg";
+    const pickedImages = result.assets.slice(0, 2).map((asset, index) => {
+      const mimeType = asset.mimeType || "image/jpeg";
+      return {
+        uri: asset.uri,
+        name: asset.fileName || asset.uri.split("/").pop() || `incident-${index + 1}.jpg`,
+        type: mimeType,
+      };
+    });
 
-    if (!mimeType.startsWith("image/")) {
+    if (!pickedImages.every((item) => item.type.startsWith("image/"))) {
       setIncidentImage(null);
       setIncidentImageError("Please choose a valid image file.");
       return;
     }
 
-    setIncidentImage({
-      uri: asset.uri,
-      name: asset.fileName || asset.uri.split("/").pop() || "incident.jpg",
-      type: mimeType,
-    });
+    setIncidentImage({ ...pickedImages[0], items: pickedImages });
     setIncidentImageError("");
   }, []);
-
   const submitIncident = useCallback(async () => {
-    if (incidentBusy) return;
+  if (incidentBusy) return;
+  const nextErrors = {};
 
-    if (!incidentDraft.type || !incidentDraft.level) {
-      Alert.alert("Missing Details", "Choose an incident type and severity level.");
-      return;
+  if (!incidentDraft.type || !incidentDraft.level) {
+    if (!incidentDraft.type) nextErrors.type = "Incident type is required.";
+    if (!incidentDraft.level) nextErrors.level = "Severity level is required.";
+  }
+
+  const cleanDistrict = String(incidentDraft.district || "").trim();
+  const cleanBarangay = String(incidentDraft.barangay || "").trim();
+  const cleanStreet = sanitizeStreetDetails(incidentDraft.street);
+  const cleanDescription = sanitizeIncidentDescription(incidentDraft.description);
+
+  const cleanLocation = buildIncidentAddress({
+    district: cleanDistrict,
+    barangay: cleanBarangay,
+    street: cleanStreet,
+    location: incidentDraft.location,
+  });
+
+  if (!cleanDistrict) {
+    nextErrors.district = "District is required.";
+  }
+
+  if (!cleanBarangay) {
+    nextErrors.barangay = "Barangay/location is required.";
+  }
+
+  if (!cleanStreet) {
+    nextErrors.street = "Street, purok, or landmark is required.";
+  }
+
+  const hasCoordinates = isValidCoordinate(
+    incidentDraft.latitude,
+    incidentDraft.longitude
+  );
+
+  if (!hasCoordinates) {
+    nextErrors.location = "Tap the map or use current location to set coordinates.";
+  }
+
+  const reportPointInsideJaen = isPointInsideJaenBoundary({
+    latitude: Number(incidentDraft.latitude),
+    longitude: Number(incidentDraft.longitude),
+  });
+
+  if (!(reportPointInsideJaen || incidentDebugMode)) {
+    nextErrors.location = "You are outside Jaen. Reporting is disabled.";
+  }
+
+  if (cleanDescription.length < 5) {
+    nextErrors.description = "Description/reason must be at least 5 characters.";
+  }
+
+  if (!incidentImage?.uri) {
+    setIncidentImageError("Attach a photo before submitting this incident.");
+    nextErrors.image = "Attach an image before submitting.";
+  }
+
+  if (Object.keys(nextErrors).length) {
+    setIncidentErrors(nextErrors);
+    Alert.alert("Check Incident Form", Object.values(nextErrors)[0]);
+    return;
+  }
+
+  setIncidentErrors({});
+
+  setIncidentBusy(true);
+
+  try {
+    const payload = {
+      ...incidentDraft,
+      district: cleanDistrict,
+      barangay: cleanBarangay,
+      street: cleanStreet,
+      streetAddress: cleanStreet,
+      location: cleanLocation,
+      latitude: incidentDraft.latitude,
+      longitude: incidentDraft.longitude,
+      description: cleanDescription,
+      usernames: incidentDraft.usernames || user?.username || "",
+      phone: incidentDraft.phone || user?.phone || "",
+    };
+
+    const uploadParameters = {};
+    Object.entries(payload).forEach(([key, value]) => {
+      uploadParameters[key] = value == null ? "" : String(value);
+    });
+
+    const imagesToUpload = Array.isArray(incidentImage.items)
+      ? incidentImage.items
+      : [incidentImage];
+    const primaryImage = imagesToUpload.find((item) => item?.uri) || incidentImage;
+
+    await uploadSingleFile("/incident/register", primaryImage.uri, {
+      fieldName: "image",
+      mimeType: primaryImage.type || "image/jpeg",
+      parameters: uploadParameters,
+    });
+
+    const incidentsRes = await api.get("/incident/getIncidents");
+    const freshIncidents = Array.isArray(incidentsRes?.data)
+      ? incidentsRes.data
+      : [];
+
+    if (typeof setIncidents === "function") {
+      setIncidents(freshIncidents);
     }
 
-    const cleanLocation = sanitizeIncidentLocation(incidentDraft.location);
-    const cleanDescription = sanitizeIncidentDescription(incidentDraft.description);
+    Alert.alert("Incident Submitted", "The report has been recorded.");
+    setIncidentDraft(EMPTY_INCIDENT);
+    setIncidentErrors({});
+    setIncidentImage(null);
+    setIncidentImageError("");
+  } catch (err) {
+    console.log("Incident submit failed:", {
+      message: err?.message,
+      data: err?.response?.data,
+      status: err?.response?.status,
+    });
 
-    if (!cleanLocation) {
-      Alert.alert(
-        "Incident Address Required",
-        "Type the incident address, use your current location, or tap the map."
-      );
-      return;
-    }
-
-    const hasCoordinates = isValidCoordinate(
-      incidentDraft.latitude,
-      incidentDraft.longitude
+    Alert.alert(
+      "Submit Failed",
+      err?.response?.data?.message || err?.message || "Error submitting incident."
     );
-
-    if ((incidentDraft.latitude || incidentDraft.longitude) && !hasCoordinates) {
-      Alert.alert(
-        "Invalid Coordinates",
-        "Use current location again or tap the map to refresh the incident point."
-      );
-      return;
-    }
-
-    if (cleanDescription.length < 5) {
-      Alert.alert("More Details Needed", "Add a short incident description.");
-      return;
-    }
-
-    if (!incidentImage?.uri) {
-      setIncidentImageError("Attach a photo before submitting this incident.");
-      Alert.alert("Image Required", "Attach an image before submitting.");
-      return;
-    }
-
-    setIncidentBusy(true);
-
-    try {
-      const formData = new FormData();
-      const payload = {
-        ...incidentDraft,
-        location: cleanLocation,
-        latitude: hasCoordinates ? incidentDraft.latitude : "",
-        longitude: hasCoordinates ? incidentDraft.longitude : "",
-        description: cleanDescription,
-        usernames: incidentDraft.usernames || user?.username || "",
-        phone: incidentDraft.phone || user?.phone || "",
-      };
-
-      Object.entries(payload).forEach(([key, value]) => {
-        formData.append(key, value ?? "");
-      });
-
-      formData.append("image", {
-        uri: incidentImage.uri,
-        name: incidentImage.name,
-        type: incidentImage.type,
-      });
-
-      await api.post("/incident/register", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      Alert.alert("Incident Submitted", "The report has been recorded.");
-      setIncidentDraft(EMPTY_INCIDENT);
-      setIncidentImage(null);
-      setIncidentImageError("");
-    } catch (err) {
-      Alert.alert(
-        "Submit Failed",
-        err?.response?.data?.message || "Error submitting incident."
-      );
-    } finally {
-      setIncidentBusy(false);
-    }
-  }, [
-    incidentBusy,
-    incidentDraft,
-    incidentImage,
-    user?.phone,
-    user?.username,
-  ]);
+  } finally {
+    setIncidentBusy(false);
+  }
+}, [
+  incidentBusy,
+  incidentDraft,
+  incidentDebugMode,
+  incidentImage,
+  setIncidents,
+  user?.phone,
+  user?.username,
+]);
 
   const handleRegionChangeComplete = useCallback(
     (region) => {
@@ -1581,7 +2242,6 @@ export default function Map() {
   return (
     <View style={styles.container}>
       <MapView
-        key={`map-${activeModule || "none"}`}
         ref={mapRef}
         provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
         style={styles.map}
@@ -1590,42 +2250,69 @@ export default function Map() {
         showsUserLocation={false}
         showsMyLocationButton={false}
         toolbarEnabled={false}
+        customMapStyle={theme?.mapStyle || []}
         scrollEnabled={!isBottomNavInteracting}
         zoomEnabled={!isBottomNavInteracting}
         rotateEnabled={panelState === "NAVIGATION" && !isBottomNavInteracting}
         pitchEnabled={panelState === "NAVIGATION" && !isBottomNavInteracting}
         onPress={handleMapPress}
+        onPanDrag={pauseFollowForManualPan}
         onRegionChangeComplete={handleRegionChangeComplete}
       >
         {jaenFocusMask}
         {jaenAtmosphereLayer}
-        {showHomepageBarangays &&
-          homepageBarangays.map((barangay) => {
-            const isSelected = selectedBarangay?.id === barangay.id;
-            return (
-              <Polygon
-                key={`home-brgy-${barangay.id}`}
-                coordinates={barangay.mainRing}
-                strokeColor={isSelected ? "#FACC15" : barangay.color}
-                strokeWidth={isSelected ? 3.5 : 1.65}
-                fillColor={isSelected ? "rgba(250,204,21,0.16)" : barangay.fillColor}
-                tappable
-                onPress={() => handleSelectBarangay(barangay)}
-                zIndex={isSelected ? 28 : 18}
-              />
-            );
-          })}
+       {showHomepageBarangays &&
+  homepageBarangays.map((barangay) => {
+    const isSelected = selectedBarangay?.id === barangay.id;
+    const allowBarangayPolygonPress = !isIncident && !isEvac;
+    const reportStats = incidentBarangayCounts[barangay.id] || {};
+    const reportCount = Number(reportStats.count || 0);
+    const heatStyle = getHeatStyle(reportCount, maxBarangayIncidentCount, isSelected);
+    const strokeColor = heatStyle.strokeColor || barangay.color;
+    const fillColor = heatStyle.fillColor || barangay.fillColor;
+
+    return (
+      <React.Fragment key={`home-brgy-wrap-${barangay.id}`}>
+        {heatStyle.glow && (
+          <Polygon
+            key={`home-brgy-glow-${barangay.id}`}
+            coordinates={barangay.mainRing}
+            strokeColor="rgba(255,31,31,0.38)"
+            strokeWidth={7}
+            fillColor="rgba(255,31,31,0.04)"
+            tappable={false}
+            zIndex={isSelected ? 27 : 17}
+          />
+        )}
+        <Polygon
+          key={`home-brgy-${barangay.id}`}
+          coordinates={barangay.mainRing}
+          strokeColor={strokeColor}
+          strokeWidth={heatStyle.strokeWidth}
+          fillColor={isSelected ? "rgba(250,204,21,0.16)" : fillColor}
+          tappable={allowBarangayPolygonPress}
+          onPress={
+            allowBarangayPolygonPress
+              ? () => handleSelectBarangay(barangay)
+              : undefined
+          }
+          zIndex={isSelected ? 28 : 18}
+        />
+      </React.Fragment>
+    );
+  })}
         {jaenBoundary}
         {isFlood && floodLayers}
         {isEarthquake && earthquakeLayer}
         {isBarangay && mongoBarangayBoundaries}
         {isBarangay && localBarangayBoundaries}
 
-        {isEvac && userCoordinate && (
+        {isEvac && userCoordinate && !isNavigating && (
           <SafeMarker key="evac-user" coordinate={userCoordinate} pinColor="#2563eb" />
         )}
 
         {isEvac &&
+          !isNavigating &&
           normalizedEvacPlaces.map((place) => {
             const markerCoordinate = place.coordinate || toMarkerCoordinate(place);
             if (!markerCoordinate) return null;
@@ -1650,6 +2337,7 @@ export default function Map() {
             );
           })}
 {showBarangayNameMarkers &&
+  !(isEvac && isNavigating) &&
   homepageBarangays.map((barangay) => (
     <SafeMarker
       key={`home-brgy-label-${barangay.id}`}
@@ -1658,34 +2346,49 @@ export default function Map() {
       centerOffset={{ x: 0, y: 0 }}
       zIndex={selectedBarangay?.id === barangay.id ? 90 : 70}
       tracksViewChanges
-      onPress={() => handleSelectBarangay(barangay)}
+      onPress={() => {
+        if (!isEvac) {
+          handleSelectBarangay(barangay);
+        }
+      }}
     >
       <BarangayNameMarker
         label={barangay.label}
         color={barangay.color}
         selected={selectedBarangay?.id === barangay.id}
-        incidentCount={incidentBarangayCounts[barangay.id] || 0}
-        onPress={() => handleSelectBarangay(barangay)}
+        incidentCount={isEvac ? 0 : incidentBarangayCounts[barangay.id]?.count || 0}
+        onPress={() => {
+          if (!isEvac) {
+            handleSelectBarangay(barangay);
+          }
+        }}
       />
     </SafeMarker>
   ))}
-        {isIncident &&
-          visibleIncidentMarkers.map((incident) => (
-            <SafeMarker
-              key={incident._id}
-              coordinate={incident}
-              pinColor={
-                INCIDENT_LEVEL_COLOR[String(incident.level || "critical").toLowerCase()] ||
-                "#dc2626"
-              }
-            />
-          ))}
+{shouldShowIncidentMarkers &&
+  visibleIncidentMarkers.map((incident) => {
+    const latitude = Number(incident?.latitude);
+    const longitude = Number(incident?.longitude);
 
-        {selectedIncidentCoordinate && (
+    if (!isValidCoordinate(latitude, longitude)) return null;
+
+    return (
+      <Marker
+        key={incident._id || `${latitude}-${longitude}`}
+        coordinate={{ latitude, longitude }}
+        anchor={{ x: 0.5, y: 1 }}
+        zIndex={120}
+        tracksViewChanges={false}
+      >
+        <IncidentMapMarker level={incident?.level} />
+      </Marker>
+    );
+  })}
+        {isIncident && selectedIncidentCoordinate && (
           <SafeMarker coordinate={selectedIncidentCoordinate} pinColor="#111827" />
         )}
 
-        {isEvac && selectedEvacCoordinate && !normalizedSelectedEvac?._id && (
+        {isEvac && !isNavigating && selectedEvacCoordinate && !normalizedSelectedEvac?._id && (
           <SafeMarker coordinate={selectedEvacCoordinate}>
             <PillMarker
               color="#16a34a"
@@ -1696,17 +2399,52 @@ export default function Map() {
         )}
 
         {isEvac &&
-          routes.map((route, index) =>
-            panelState === "NAVIGATION" && !route.isRecommended ? null : (
+          routes.map((route, index) => {
+            const coordinates =
+              panelState === "NAVIGATION"
+                ? getNavigationRouteCoords(route.coords, currentLocation)
+                : safeArray(route.coords);
+
+            return panelState === "NAVIGATION" && !route.isRecommended ? null : (
               <Polyline
                 key={route.id ?? index}
-                coordinates={safeArray(route.coords)}
-                strokeColor={route.isRecommended ? "#22c55e" : "#ef4444"}
-                strokeWidth={6}
+                coordinates={coordinates}
+                strokeColor={panelState === "NAVIGATION" ? "#6D28D9" : route.isRecommended ? "#22c55e" : "#ef4444"}
+                strokeWidth={panelState === "NAVIGATION" ? 10 : 6}
+                zIndex={panelState === "NAVIGATION" ? 180 : 110}
               />
-            )
-          )}
+            );
+          })}
+
+        {isEvac && isNavigating && userCoordinate && (
+          <SafeMarker
+            key="navigation-user-arrow"
+            coordinate={currentLocation || userCoordinate}
+            anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={1500}
+            tracksViewChanges
+          >
+            <NavigationArrowMarker heading={currentHeading} />
+          </SafeMarker>
+        )}
       </MapView>
+
+      {isEvac && isNavigating && (
+        <View style={styles.wazeTopOverlay} pointerEvents="auto">
+          <View style={styles.wazeTopTurnIcon}>
+            <Ionicons name="return-up-forward" size={30} color="#14532D" />
+          </View>
+          <View style={styles.wazeTopCopy}>
+            <Text style={styles.wazeTopInstruction} numberOfLines={1}>
+              {navigationTopSummary.instruction}
+            </Text>
+          </View>
+          <Text style={styles.wazeTopDistance}>
+            {navigationTopSummary.distanceToNextTurn}
+          </Text>
+        </View>
+      )}
+
 
       {showMapWeather && (
         <View style={styles.mapWeatherOverlay} pointerEvents="box-none">
@@ -1722,13 +2460,23 @@ export default function Map() {
           setIncidentDraft={setIncidentDraft}
           incidentImage={incidentImage}
           incidentImageError={incidentImageError}
+          incidentErrors={incidentErrors}
           pickIncidentImage={pickIncidentImage}
           selectedIncidentCoordinate={selectedIncidentCoordinate}
           useCurrentIncidentLocation={useCurrentIncidentLocation}
           incidentLocating={incidentLocating}
           submitIncident={submitIncident}
           incidentBusy={incidentBusy}
+          incidentDebugMode={incidentDebugMode}
+          setIncidentDebugMode={setIncidentDebugMode}
+          canSubmitIncidentFromLocation={canSubmitIncidentFromLocation}
+          incidentPointInsideJaen={incidentPointInsideJaen}
           incidentCount={selectedBarangay ? selectedBarangayIncidents.length : normalizedIncidents.length}
+          incidentTopType={
+            selectedBarangay
+              ? incidentBarangayCounts[selectedBarangay.id]?.topType || ""
+              : ""
+          }
           incidents={selectedBarangayIncidents}
           selectedBarangay={selectedBarangay}
           onClearSelectedBarangay={clearSelectedBarangay}
@@ -1745,9 +2493,32 @@ export default function Map() {
           setRouteRequested={setRouteRequested}
           routes={routes}
           setRoutes={setRoutes}
+          activeRoute={activeNavigationRoute}
           setActiveRoute={setActiveRoute}
           travelMode={travelMode}
           setTravelMode={setTravelMode}
+          isNavigating={isNavigating}
+          setIsNavigating={setIsNavigating}
+          followMode={followMode}
+          setFollowMode={setFollowMode}
+          currentHeading={currentHeading}
+          setCurrentHeading={setCurrentHeading}
+          currentLocation={currentLocation}
+          setCurrentLocation={setCurrentLocation}
+          nextRoutePoint={nextRoutePoint}
+          setNextRoutePoint={setNextRoutePoint}
+          updateNavigationCamera={updateNavigationCamera}
+          recenterNavigationCamera={recenterNavigationCamera}
+          startNavigationCamera={startNavigationCamera}
+          resetNavigationCamera={resetNavigationCamera}
+          exitNavigationMode={exitNavigationMode}
+          navigationTopSummary={navigationTopSummary}
+          showIncidentMarkers={showIncidentMarkers}
+setShowIncidentMarkers={setShowIncidentMarkers}
+showBarangayMarkers={showBarangayMarkers}
+setShowBarangayMarkers={setShowBarangayMarkers}
+homepageBarangays={homepageBarangays}
+handleSelectBarangay={handleSelectBarangay}
         />
       )}
     </View>
@@ -1761,13 +2532,19 @@ function ModulePanel({
   setIncidentDraft,
   incidentImage,
   incidentImageError,
+  incidentErrors,
   pickIncidentImage,
   selectedIncidentCoordinate,
   useCurrentIncidentLocation,
   incidentLocating,
   submitIncident,
   incidentBusy,
+  incidentDebugMode,
+  setIncidentDebugMode,
+  canSubmitIncidentFromLocation,
+  incidentPointInsideJaen,
   incidentCount,
+  incidentTopType,
   incidents,
   selectedBarangay,
   onClearSelectedBarangay,
@@ -1784,79 +2561,217 @@ function ModulePanel({
   setRouteRequested,
   routes,
   setRoutes,
+  activeRoute,
   setActiveRoute,
   travelMode,
   setTravelMode,
+  isNavigating,
+  setIsNavigating,
+  followMode,
+  setFollowMode,
+  currentHeading,
+  setCurrentHeading,
+  currentLocation,
+  setCurrentLocation,
+  nextRoutePoint,
+  setNextRoutePoint,
+  updateNavigationCamera,
+  recenterNavigationCamera,
+  startNavigationCamera,
+  resetNavigationCamera,
+  exitNavigationMode,
+  navigationTopSummary,
+    showIncidentMarkers,
+  setShowIncidentMarkers,
+  showBarangayMarkers,
+  setShowBarangayMarkers,
+    homepageBarangays,
+  handleSelectBarangay,
+ 
 }) {
-  const routeSummary = routes[0]?.summary;
+  const [incidentPanelTab, setIncidentPanelTab] = useState("report");
+  const [evacFilter, setEvacFilter] = useState("nearest");
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const lastNavigationPanelY = useRef(NAV_PANEL_DEFAULT_OFFSET);
+  const isNavigationPanelActiveRef = useRef(false);
+  const formScrollRef = useRef(null);
+  const inputY = useRef({});
+
+  const scrollToField = (key) => {
+    const y = inputY.current[key] || 0;
+    requestAnimationFrame(() => {
+      formScrollRef.current?.scrollTo({
+        y: Math.max(0, y - 24),
+        animated: true,
+      });
+    });
+  };
+
+  const selectedRoute = activeRoute || routes[0] || null;
+  const routeSummary = selectedRoute?.summary;
+  const routeDistance = navigationTopSummary?.remainingDistance || (routeSummary?.km ? `${routeSummary.km} km` : "--");
+  const routeETA = navigationTopSummary?.eta || routeSummary?.displayTime || "--";
+  const filteredEvacPlaces = useMemo(() => {
+    const items = [...normalizedEvacPlaces];
+    const withSpace = (place) =>
+      String(place.capacityStatus || "").toLowerCase() !== "full" &&
+      Number(place.availableSlots ?? ((place.capacityIndividual || 0) - (place.currentOccupants || 0))) > 0;
+
+    if (evacFilter === "most-available") {
+      return items.sort(
+        (a, b) =>
+          Number(b.availableSlots ?? ((b.capacityIndividual || 0) - (b.currentOccupants || 0))) -
+          Number(a.availableSlots ?? ((a.capacityIndividual || 0) - (a.currentOccupants || 0)))
+      );
+    }
+
+    if (evacFilter === "full") {
+      return items.filter((place) => String(place.capacityStatus || "").toLowerCase() === "full");
+    }
+
+    if (evacFilter === "has-space") {
+      return items.filter(withSpace);
+    }
+
+    if (evacFilter === "barangay") {
+      return items.sort((a, b) =>
+        String(a.barangayName || "").localeCompare(String(b.barangayName || ""))
+      );
+    }
+
+    return items.sort((a, b) => distance(USER_POS, a.coordinate) - distance(USER_POS, b.coordinate));
+  }, [evacFilter, normalizedEvacPlaces]);
+
   const evacPlacesByStatus = useMemo(
     () => ({
-      limited: normalizedEvacPlaces.filter((place) => place.capacityStatus === "limited"),
-      full: normalizedEvacPlaces.filter((place) => place.capacityStatus === "full"),
-      available: normalizedEvacPlaces.filter((place) => place.capacityStatus === "available"),
-      other: normalizedEvacPlaces.filter(
+      limited: filteredEvacPlaces.filter((place) => place.capacityStatus === "limited"),
+      full: filteredEvacPlaces.filter((place) => place.capacityStatus === "full"),
+      available: filteredEvacPlaces.filter((place) => place.capacityStatus === "available"),
+      other: filteredEvacPlaces.filter(
         (place) => !["available", "limited", "full"].includes(place.capacityStatus)
       ),
     }),
-    [normalizedEvacPlaces]
+    [filteredEvacPlaces]
   );
   const evacStatusSummary = [
     { key: "available", count: normalizedEvacPlaces.filter((place) => place.capacityStatus === "available").length },
     { key: "limited", count: normalizedEvacPlaces.filter((place) => place.capacityStatus === "limited").length },
     { key: "full", count: normalizedEvacPlaces.filter((place) => place.capacityStatus === "full").length },
   ];
+  const currentPanelMaxOffset = activeModule === "evac" && isNavigating
+    ? NAV_PANEL_MAX_OFFSET
+    : PANEL_MAX_OFFSET;
+  const currentPanelDefaultOffset = activeModule === "evac" && isNavigating
+    ? NAV_PANEL_DEFAULT_OFFSET
+    : PANEL_DEFAULT_OFFSET;
+
   const initialPanelY =
     typeof panelY === "number"
-      ? Math.max(PANEL_MIN_OFFSET, Math.min(PANEL_MAX_OFFSET, panelY))
-      : PANEL_DEFAULT_OFFSET;
+      ? Math.max(PANEL_MIN_OFFSET, Math.min(currentPanelMaxOffset, panelY))
+      : currentPanelDefaultOffset;
   const translateY = useRef(new Animated.Value(initialPanelY)).current;
   const lastY = useRef(initialPanelY);
 
   useEffect(() => {
     if (typeof panelY !== "number") return;
-    const nextY = Math.max(PANEL_MIN_OFFSET, Math.min(PANEL_MAX_OFFSET, panelY));
+    const nextY = Math.max(PANEL_MIN_OFFSET, Math.min(currentPanelMaxOffset, panelY));
     translateY.setValue(nextY);
     lastY.current = nextY;
-  }, [panelY, translateY]);
+  }, [currentPanelMaxOffset, panelY, translateY]);
+
+  useEffect(() => {
+    isNavigationPanelActiveRef.current = activeModule === "evac" && isNavigating;
+  }, [activeModule, isNavigating]);
+
+  const panelMaxOffsetRef = useRef(currentPanelMaxOffset);
+  const panelSnapPointsRef = useRef([
+    PANEL_MIN_OFFSET,
+    PANEL_DEFAULT_OFFSET,
+    PANEL_MAX_OFFSET,
+  ]);
+
+  useEffect(() => {
+    panelMaxOffsetRef.current = currentPanelMaxOffset;
+    panelSnapPointsRef.current =
+      activeModule === "evac" && isNavigating
+        ? [
+            NAV_PANEL_EXPANDED_OFFSET,
+            NAV_PANEL_HALF_OFFSET,
+            NAV_PANEL_COLLAPSED_OFFSET,
+          ]
+        : [
+            PANEL_MIN_OFFSET,
+            Math.min(PANEL_DEFAULT_OFFSET, currentPanelMaxOffset),
+            currentPanelMaxOffset,
+          ];
+    if (activeModule === "evac" && isNavigating) {
+      lastNavigationPanelY.current = Math.max(
+        PANEL_MIN_OFFSET,
+        Math.min(currentPanelMaxOffset, lastNavigationPanelY.current)
+      );
+    }
+  }, [activeModule, currentPanelMaxOffset, isNavigating]);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dy) > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        Math.abs(gesture.dy) > 4 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) * 0.75,
+      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+        isNavigationPanelActiveRef.current &&
+        Math.abs(gesture.dy) > 5 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) * 0.75,
+
       onPanResponderGrant: () => {
         translateY.stopAnimation((value) => {
-          lastY.current = Math.max(PANEL_MIN_OFFSET, Math.min(PANEL_MAX_OFFSET, value));
+          lastY.current = Math.max(PANEL_MIN_OFFSET, Math.min(panelMaxOffsetRef.current, value));
           translateY.setOffset(lastY.current);
           translateY.setValue(0);
         });
       },
+
       onPanResponderMove: (_, gesture) => {
         const nextY = Math.max(
           PANEL_MIN_OFFSET,
-          Math.min(PANEL_MAX_OFFSET, lastY.current + gesture.dy)
+          Math.min(panelMaxOffsetRef.current, lastY.current + gesture.dy)
         );
         translateY.setValue(nextY - lastY.current);
       },
+
       onPanResponderRelease: (_, gesture) => {
         translateY.flattenOffset();
-        const finalY = Math.max(
+
+        const rawFinalY = Math.max(
           PANEL_MIN_OFFSET,
-          Math.min(PANEL_MAX_OFFSET, lastY.current + gesture.dy)
+          Math.min(panelMaxOffsetRef.current, lastY.current + gesture.dy)
         );
+        const projectedY = rawFinalY + Math.max(-90, Math.min(90, gesture.vy * 38));
+        const finalY = getNearestSnapPoint(projectedY, panelSnapPointsRef.current);
+
         lastY.current = finalY;
+        if (isNavigationPanelActiveRef.current) {
+          lastNavigationPanelY.current = finalY;
+        }
         setPanelY(finalY);
+
         Animated.spring(translateY, {
           toValue: finalY,
-          stiffness: 132,
-          damping: 20,
+          stiffness: 210,
+          damping: 30,
           mass: 0.9,
           useNativeDriver: true,
         }).start();
       },
+
       onPanResponderTerminate: () => {
         translateY.flattenOffset();
         translateY.setValue(lastY.current);
+        if (isNavigationPanelActiveRef.current) {
+          lastNavigationPanelY.current = lastY.current;
+        }
+        setPanelY(lastY.current);
       },
     })
   ).current;
@@ -1873,7 +2788,12 @@ function ModulePanel({
 
   const requestRoutes = () => {
     if (!evac) return;
+    setIsNavigating(false);
+    setFollowMode(false);
     setPanelState("ROUTE_SELECTION");
+    setPanelY(300);
+    lastY.current = 300;
+    translateY.setValue(300);
     setRouteRequested(true);
   };
 
@@ -1886,8 +2806,50 @@ function ModulePanel({
     setTimeout(() => setRouteRequested(true), 0);
   };
 
+  const startNavigation = () => {
+    if (!evac || !selectedRoute?.coords?.length) return;
+
+    const { heading, nextPoint, snappedLocation } = startNavigationCamera(selectedRoute);
+
+    setActiveRoute(selectedRoute);
+    setCurrentLocation(snappedLocation || USER_POS);
+    setNextRoutePoint(nextPoint);
+    setCurrentHeading(heading);
+    setIsNavigating(true);
+    setFollowMode(true);
+    setPanelState("NAVIGATION");
+    const nextPanelY = Math.max(
+      PANEL_MIN_OFFSET,
+      Math.min(NAV_PANEL_MAX_OFFSET, lastNavigationPanelY.current)
+    );
+    setPanelY(nextPanelY);
+    lastY.current = nextPanelY;
+    translateY.setValue(nextPanelY);
+  };
+
+  const performStopNavigation = () => {
+    setShowStopConfirm(false);
+    exitNavigationMode();
+    setPanelY(300);
+    lastY.current = 300;
+    translateY.setValue(300);
+  };
+
+  const requestStopNavigation = () => {
+    setShowStopConfirm(true);
+  };
+
   const renderEvacCard = (place) => {
     const statusMeta = getEvacStatusCopy(place.capacityStatus);
+    const totalCapacity = Number(place.totalCapacity ?? place.capacityIndividual ?? 0);
+    const currentOccupants = Number(place.currentOccupants || 0);
+    const availableSlots = Number(
+      place.availableSlots ?? Math.max(0, totalCapacity - currentOccupants)
+    );
+    const occupancyPercentage = Number(
+      place.occupancyPercentage ??
+        (totalCapacity ? Math.round((currentOccupants / totalCapacity) * 100) : 0)
+    );
     return (
       <TouchableOpacity
         key={place?._id || `${place?.latitude}-${place?.longitude}`}
@@ -1916,6 +2878,9 @@ function ModulePanel({
           <Text style={styles.evacMeta} numberOfLines={1}>
             {place.barangayName || place.location || "Evacuation center"}
           </Text>
+          <Text style={styles.evacMeta} numberOfLines={1}>
+            {currentOccupants}/{totalCapacity} occupants | {availableSlots} slots | {occupancyPercentage}%
+          </Text>
         </View>
         <View
           style={[
@@ -1939,199 +2904,368 @@ function ModulePanel({
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={styles.panelWrap}
     >
-      <Animated.View style={[styles.panel, { transform: [{ translateY }] }]}>
+      <Animated.View
+        {...(activeModule === "evac" && isNavigating ? panResponder.panHandlers : {})}
+        style={[
+          styles.panel,
+          activeModule === "evac" && isNavigating && styles.navigationPanelSurface,
+          { transform: [{ translateY }] },
+        ]}
+      >
+        {activeModule === "evac" && isNavigating && (
+          <TouchableOpacity
+            style={styles.navigationRecenterButton}
+            activeOpacity={0.86}
+            onPress={recenterNavigationCamera}
+          >
+            <Ionicons
+              name={followMode ? "locate" : "locate-outline"}
+              size={23}
+              color="#14532D"
+            />
+          </TouchableOpacity>
+        )}
         <View style={styles.dragZone} {...panResponder.panHandlers}>
           <View style={styles.handle} />
         </View>
+{activeModule === "incident" && (
+  <ScrollView
+    ref={formScrollRef}
+    showsVerticalScrollIndicator={false}
+    keyboardShouldPersistTaps="handled"
+  >
+    <PanelHeader
+      title={selectedBarangay ? selectedBarangay.label : "Incident Reporting"}
+      meta={
+        selectedBarangay
+          ? `${incidentCount} reports in this barangay${
+              incidentTopType ? ` | Most reported: ${incidentTopType}` : ""
+            }`
+          : `${incidentCount} active reports visible`
+      }
+      onBack={onBack}
+    />
 
-        {activeModule === "incident" && (
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <PanelHeader
-              title={selectedBarangay ? selectedBarangay.label : "Incident Reporting"}
-              meta={
-                selectedBarangay
-                  ? `${incidentCount} reports in this barangay`
-                  : `${incidentCount} active reports visible`
-              }
-              onBack={onBack}
-            />
+    <View style={styles.incidentToggleCard}>
+      <View style={styles.incidentToggleHeader}>
+        <View>
+          <Text style={styles.incidentToggleEyebrow}>Incident workspace</Text>
+          <Text style={styles.incidentToggleTitle}>Choose what you want to do</Text>
+        </View>
+      </View>
 
-            <View style={styles.panelSection}>
-              <View style={styles.incidentBarangayHeader}>
-                <View style={styles.incidentBarangayIcon}>
-                  <Ionicons name="map-outline" size={17} color="#14532D" />
-                </View>
-                <View style={styles.incidentBarangayCopy}>
-                  <Text style={styles.sectionLabel}>Barangay incident view</Text>
-                  <Text style={styles.panelNote}>
-                    {selectedBarangay
-                      ? "The map is focused on the selected barangay. Reports below are filtered to this area."
-                      : "Tap a barangay outline or name on the map to zoom in and filter reports."}
-                  </Text>
-                </View>
-              </View>
+      <View style={styles.incidentToggleRow}>
+        <TouchableOpacity
+          activeOpacity={0.88}
+          style={[
+            styles.incidentToggleBtn,
+            incidentPanelTab === "report" && styles.incidentToggleBtnActive,
+          ]}
+          onPress={() => setIncidentPanelTab("report")}
+        >
+          <Ionicons name="create-outline" size={18} color={incidentPanelTab === "report" ? "#FFFFFF" : "#14532D"} />
+          <Text style={[styles.incidentToggleText, incidentPanelTab === "report" && styles.incidentToggleTextActive]}>Report</Text>
+        </TouchableOpacity>
 
-              {selectedBarangay && (
-                <TouchableOpacity
-                  style={styles.clearBarangayBtn}
-                  onPress={onClearSelectedBarangay}
-                >
-                  <Text style={styles.clearBarangayText}>Show all barangays</Text>
-                </TouchableOpacity>
-              )}
+        <TouchableOpacity
+          activeOpacity={0.88}
+          style={[
+            styles.incidentToggleBtn,
+            incidentPanelTab === "reports" && styles.incidentToggleBtnActive,
+          ]}
+          onPress={() => setIncidentPanelTab("reports")}
+        >
+          <Ionicons name="list-outline" size={18} color={incidentPanelTab === "reports" ? "#FFFFFF" : "#14532D"} />
+          <Text style={[styles.incidentToggleText, incidentPanelTab === "reports" && styles.incidentToggleTextActive]}>Reports</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          activeOpacity={0.88}
+          style={[
+            styles.incidentToggleBtn,
+            incidentPanelTab === "map" && styles.incidentToggleBtnActive,
+          ]}
+          onPress={() => setIncidentPanelTab("map")}
+        >
+          <Ionicons name="map-outline" size={18} color={incidentPanelTab === "map" ? "#FFFFFF" : "#14532D"} />
+          <Text style={[styles.incidentToggleText, incidentPanelTab === "map" && styles.incidentToggleTextActive]}>Map</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+
+    <TouchableOpacity
+      activeOpacity={0.88}
+      style={[
+        styles.debugStatusCard,
+        incidentDebugMode && styles.debugStatusCardActive,
+      ]}
+      onPress={() => setIncidentDebugMode((value) => !value)}
+    >
+      <Ionicons
+        name={incidentDebugMode ? "bug" : "bug-outline"}
+        size={18}
+        color={incidentDebugMode ? "#FFFFFF" : "#14532D"}
+      />
+      <Text
+        style={[
+          styles.debugStatusText,
+          incidentDebugMode && styles.debugStatusTextActive,
+        ]}
+      >
+        {incidentDebugMode
+          ? "Debug Mode ON: Location restriction disabled."
+          : "You are outside Jaen. Reporting is disabled."}
+      </Text>
+    </TouchableOpacity>
+
+    {!incidentDebugMode && selectedIncidentCoordinate && incidentPointInsideJaen && (
+      <View style={styles.locationAllowedCard}>
+        <Ionicons name="checkmark-circle-outline" size={17} color="#166534" />
+        <Text style={styles.locationAllowedText}>Location is inside Jaen. Reporting is enabled.</Text>
+      </View>
+    )}
+
+    {incidentPanelTab === "report" && (
+      <>
+        <View style={styles.panelSection}>
+          <View style={styles.incidentBarangayHeader}>
+            <View style={styles.incidentBarangayIcon}>
+              <Ionicons name="location-outline" size={17} color="#14532D" />
             </View>
-
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>
-                {selectedBarangay ? "Reports in barangay" : "Recent reports"}
+            <View style={styles.incidentBarangayCopy}>
+              <Text style={styles.sectionLabel}>Location setup</Text>
+              <Text style={styles.panelNote}>
+                {selectedBarangay
+                  ? "The selected barangay is already applied to this report."
+                  : "Tap a barangay outline on the map or select a district and barangay below."}
               </Text>
-              {safeArray(incidents).length === 0 ? (
-                <View style={styles.emptyIncidentState}>
-                  <Ionicons name="checkmark-circle-outline" size={24} color="#14532D" />
-                  <Text style={styles.emptyIncidentTitle}>No incidents found</Text>
-                  <Text style={styles.emptyIncidentText}>
-                    {selectedBarangay
-                      ? "There are no reports inside this barangay right now."
-                      : "No incident reports are currently visible."}
-                  </Text>
-                </View>
-              ) : (
-                safeArray(incidents)
-                  .slice(0, 6)
-                  .map((incident) => (
-                    <IncidentListItem
-                      key={incident?._id || `${incident.latitude}-${incident.longitude}`}
-                      incident={incident}
-                    />
-                  ))
-              )}
             </View>
+          </View>
 
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Report details</Text>
-              <Picker
-                selectedValue={incidentDraft.type}
-                onValueChange={(value) =>
-                  setIncidentDraft((prev) => ({ ...prev, type: value }))
-                }
-                style={styles.picker}
-              >
-                <Picker.Item label="Select incident type" value="" />
-                <Picker.Item label="Flood" value="flood" />
-                <Picker.Item label="Typhoon" value="typhoon" />
-                <Picker.Item label="Fire" value="fire" />
-                <Picker.Item label="Earthquake" value="earthquake" />
-              </Picker>
+          {selectedBarangay && (
+            <TouchableOpacity style={styles.clearBarangayBtn} onPress={onClearSelectedBarangay}>
+              <Text style={styles.clearBarangayText}>Clear selected barangay</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-              <Picker
-                selectedValue={incidentDraft.level}
-                onValueChange={(value) =>
-                  setIncidentDraft((prev) => ({ ...prev, level: value }))
-                }
-                style={styles.picker}
-              >
-                <Picker.Item label="Select severity" value="" />
-                <Picker.Item label="Low" value="low" />
-                <Picker.Item label="Medium" value="medium" />
-                <Picker.Item label="High" value="high" />
-                <Picker.Item label="Critical" value="critical" />
-              </Picker>
+        <View style={styles.panelSection}>
+          <Text style={styles.sectionLabel}>Incident type</Text>
+          <Picker selectedValue={incidentDraft.type} onValueChange={(value) => setIncidentDraft((prev) => ({ ...prev, type: value }))} style={styles.picker}>
+            <Picker.Item label="Select incident type" value="" />
+            <Picker.Item label="Flood" value="flood" />
+            <Picker.Item label="Typhoon" value="typhoon" />
+            <Picker.Item label="Fire" value="fire" />
+            <Picker.Item label="Earthquake" value="earthquake" />
+          </Picker>
+          {!!incidentErrors?.type && <Text style={styles.validationText}>{incidentErrors.type}</Text>}
 
-              <View style={styles.locationCaptureBox}>
-                <View style={styles.locationCaptureHeader}>
-                  <View style={styles.locationIconBadge}>
-                    <Ionicons name="location-outline" size={17} color="#14532D" />
-                  </View>
-                  <View style={styles.locationCopy}>
-                    <Text style={styles.locationTitle}>Incident location</Text>
-                    <Text style={styles.locationHelp}>
-                      Type the address, use your current location, or tap the map.
-                    </Text>
-                  </View>
-                </View>
+          <Text style={styles.label}>Severity</Text>
+          <Picker selectedValue={incidentDraft.level} onValueChange={(value) => setIncidentDraft((prev) => ({ ...prev, level: value }))} style={styles.picker}>
+            <Picker.Item label="Select severity" value="" />
+            <Picker.Item label="Low" value="low" />
+            <Picker.Item label="Medium" value="medium" />
+            <Picker.Item label="High" value="high" />
+            <Picker.Item label="Critical" value="critical" />
+          </Picker>
+          {!!incidentErrors?.level && <Text style={styles.validationText}>{incidentErrors.level}</Text>}
+        </View>
 
-                <TextInput
-                  style={[styles.input, styles.locationInput]}
-                  placeholder="Incident Address"
-                  value={incidentDraft.location}
-                  onChangeText={(value) =>
-                    setIncidentDraft((prev) => ({
-                      ...prev,
-                      location: sanitizeIncidentLocation(value),
-                      latitude: null,
-                      longitude: null,
-                    }))
-                  }
-                  maxLength={INCIDENT_LOCATION_MAX_LENGTH}
-                />
+        <View style={styles.panelSection}>
+          <Text style={styles.sectionLabel}>Address</Text>
 
-                <View style={styles.locationActionRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.locationActionBtn,
-                      incidentLocating && styles.disabledBtn,
-                    ]}
-                    disabled={incidentLocating}
-                    onPress={useCurrentIncidentLocation}
-                  >
-                    <Ionicons name="navigate-outline" size={15} color="#14532D" />
-                    <Text style={styles.locationActionText}>
-                      {incidentLocating ? "Getting location..." : "Use My Current Location"}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.locationStatusText}>
-                  {selectedIncidentCoordinate
-                    ? `Map point set: ${selectedIncidentCoordinate.latitude.toFixed(5)}, ${selectedIncidentCoordinate.longitude.toFixed(5)}`
-                    : "No map point yet. A typed address can still be submitted."}
-                </Text>
-              </View>
-
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="Notes"
-                multiline
-                value={incidentDraft.description}
-                onChangeText={(value) =>
-                  setIncidentDraft((prev) => ({
-                    ...prev,
-                    description: sanitizeIncidentDescription(value),
-                  }))
-                }
-                maxLength={INCIDENT_DESCRIPTION_MAX_LENGTH}
-              />
-
-              <View style={styles.formRow}>
-                <TouchableOpacity
-                  style={styles.secondaryBtn}
-                  onPress={pickIncidentImage}
-                >
-                  <Text style={styles.secondaryText}>
-                    {incidentImage?.uri ? "Change image" : "Add image"}
-                  </Text>
-                </TouchableOpacity>
-
-                {incidentImage?.uri && (
-                  <Image source={{ uri: incidentImage.uri }} style={styles.thumb} />
-                )}
-              </View>
-              {!!incidentImageError && (
-                <Text style={styles.validationText}>{incidentImageError}</Text>
-              )}
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, incidentBusy && styles.disabledBtn]}
-              disabled={incidentBusy}
-              onPress={submitIncident}
+          <Text style={styles.label}>District</Text>
+          <View style={styles.input}>
+            <Picker
+              selectedValue={incidentDraft.district}
+              onValueChange={(value) =>
+                setIncidentDraft((prev) => ({
+                  ...prev,
+                  district: value,
+                  barangay: value && BARANGAY_BY_DISTRICT[value]?.includes(prev.barangay) ? prev.barangay : "",
+                }))
+              }
+              style={{ color: incidentDraft.district ? "#10251B" : "#94A3B8" }}
             >
-              <Text style={styles.primaryText}>
-                {incidentBusy ? "Submitting..." : "Submit incident"}
+              <Picker.Item label="Select district" value="" />
+              {DISTRICT_OPTIONS.map((item) => <Picker.Item key={item} label={item} value={item} />)}
+            </Picker>
+          </View>
+          {!!incidentErrors?.district && <Text style={styles.validationText}>{incidentErrors.district}</Text>}
+
+          <Text style={styles.label}>Barangay</Text>
+          <View style={styles.input}>
+            <Picker
+              selectedValue={incidentDraft.barangay}
+              enabled={Boolean(incidentDraft.district)}
+              onValueChange={(value) => {
+                setIncidentDraft((prev) => ({ ...prev, barangay: value }));
+                const matchedBarangay = homepageBarangays.find(
+                  (item) => String(item?.label || "").trim().toLowerCase() === String(value || "").trim().toLowerCase()
+                );
+                if (matchedBarangay) handleSelectBarangay(matchedBarangay);
+              }}
+              style={{ color: incidentDraft.barangay ? "#10251B" : "#94A3B8", opacity: incidentDraft.district ? 1 : 0.6 }}
+            >
+              <Picker.Item label={incidentDraft.district ? "Select barangay" : "Select district first"} value="" />
+              {(BARANGAY_BY_DISTRICT[incidentDraft.district] || []).map((item) => <Picker.Item key={item} label={item} value={item} />)}
+            </Picker>
+          </View>
+          {!!incidentErrors?.barangay && <Text style={styles.validationText}>{incidentErrors.barangay}</Text>}
+
+          <Text style={styles.label}>Street / Landmark / Details</Text>
+          <TextInput
+            style={[styles.input, styles.locationInput]}
+            placeholder="House no., street, purok, landmark"
+            value={incidentDraft.street}
+            onFocus={() => scrollToField("street")}
+            onLayout={(event) => {
+              inputY.current.street = event.nativeEvent.layout.y;
+            }}
+            onChangeText={(value) => setIncidentDraft((prev) => ({ ...prev, street: sanitizeStreetDetails(value) }))}
+            maxLength={160}
+          />
+          {!!incidentErrors?.street && <Text style={styles.validationText}>{incidentErrors.street}</Text>}
+
+          <TouchableOpacity style={[styles.locationActionBtn, incidentLocating && styles.disabledBtn]} disabled={incidentLocating} onPress={useCurrentIncidentLocation}>
+            <Ionicons name="navigate-outline" size={15} color="#14532D" />
+            <Text style={styles.locationActionText}>{incidentLocating ? "Getting location..." : "Use My Current Location"}</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.locationStatusText}>
+            {selectedIncidentCoordinate
+              ? `Map point set: ${selectedIncidentCoordinate.latitude.toFixed(5)}, ${selectedIncidentCoordinate.longitude.toFixed(5)}`
+              : "No map point yet. Tap the map or use current location."}
+          </Text>
+          {!!incidentErrors?.location && <Text style={styles.validationText}>{incidentErrors.location}</Text>}
+
+          <View style={styles.addressPreviewCard}>
+            <Text style={styles.addressPreviewLabel}>Full Address Preview</Text>
+            <Text style={styles.addressPreviewText}>
+              {buildIncidentAddress({
+                district: incidentDraft.district,
+                barangay: incidentDraft.barangay,
+                street: incidentDraft.street,
+                location: incidentDraft.location,
+              }) || "No incident address set yet"}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.panelSection}>
+          <Text style={styles.sectionLabel}>Notes and proof</Text>
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            placeholder="Describe what happened"
+            multiline
+            value={incidentDraft.description}
+            onFocus={() => scrollToField("description")}
+            onLayout={(event) => {
+              inputY.current.description = event.nativeEvent.layout.y;
+            }}
+            onChangeText={(value) => setIncidentDraft((prev) => ({ ...prev, description: sanitizeIncidentDescription(value) }))}
+            maxLength={INCIDENT_DESCRIPTION_MAX_LENGTH}
+          />
+          {!!incidentErrors?.description && <Text style={styles.validationText}>{incidentErrors.description}</Text>}
+
+          <View style={styles.formRow}>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={pickIncidentImage}>
+              <Text style={styles.secondaryText}>
+                {incidentImage?.uri ? "Change photos" : "Add photos"}
               </Text>
             </TouchableOpacity>
-          </ScrollView>
+            {incidentImage?.uri &&
+              (incidentImage.items || [incidentImage]).slice(0, 2).map((item, index) => (
+                <Image
+                  key={`${item.uri}-${index}`}
+                  source={{ uri: item.uri }}
+                  style={styles.thumb}
+                />
+              ))}
+          </View>
+
+          {!!(incidentImageError || incidentErrors?.image) && (
+            <Text style={styles.validationText}>{incidentImageError || incidentErrors.image}</Text>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.primaryBtn,
+            (incidentBusy || !canSubmitIncidentFromLocation) && styles.disabledBtn,
+          ]}
+          disabled={incidentBusy || !canSubmitIncidentFromLocation}
+          onPress={submitIncident}
+        >
+          <Text style={styles.primaryText}>{incidentBusy ? "Submitting..." : "Submit incident"}</Text>
+        </TouchableOpacity>
+      </>
+    )}
+
+    {incidentPanelTab === "reports" && (
+      <View style={styles.panelSection}>
+        <View style={styles.incidentBarangayHeader}>
+          <View style={styles.incidentBarangayIcon}>
+            <Ionicons name="newspaper-outline" size={17} color="#14532D" />
+          </View>
+          <View style={styles.incidentBarangayCopy}>
+            <Text style={styles.sectionLabel}>{selectedBarangay ? "Reports in barangay" : "Recent reports"}</Text>
+            <Text style={styles.panelNote}>{selectedBarangay ? "Only reports inside the selected barangay are shown." : "Showing the latest visible incident reports."}</Text>
+          </View>
+        </View>
+
+        {safeArray(incidents).length === 0 ? (
+          <View style={styles.emptyIncidentState}>
+            <Ionicons name="checkmark-circle-outline" size={24} color="#14532D" />
+            <Text style={styles.emptyIncidentTitle}>No incidents found</Text>
+            <Text style={styles.emptyIncidentText}>{selectedBarangay ? "There are no reports inside this barangay right now." : "No incident reports are currently visible."}</Text>
+          </View>
+        ) : (
+          safeArray(incidents).slice(0, 6).map((incident) => (
+            <IncidentListItem key={incident?._id || `${incident.latitude}-${incident.longitude}`} incident={incident} />
+          ))
         )}
+      </View>
+    )}
+
+    {incidentPanelTab === "map" && (
+      <>
+        <View style={styles.panelSection}>
+          <View style={styles.incidentBarangayHeader}>
+            <View style={styles.incidentBarangayIcon}>
+              <Ionicons name="map-outline" size={17} color="#14532D" />
+            </View>
+            <View style={styles.incidentBarangayCopy}>
+              <Text style={styles.sectionLabel}>Barangay map view</Text>
+              <Text style={styles.panelNote}>{selectedBarangay ? "The map is focused on the selected barangay." : "Tap a barangay outline or label to focus the report view."}</Text>
+            </View>
+          </View>
+          {selectedBarangay && (
+            <TouchableOpacity style={styles.clearBarangayBtn} onPress={onClearSelectedBarangay}>
+              <Text style={styles.clearBarangayText}>Show all barangays</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.panelSection}>
+          <Text style={styles.sectionLabel}>Map visibility</Text>
+          <View style={styles.mapToggleGrid}>
+            <TouchableOpacity activeOpacity={0.88} style={[styles.mapToggleBtn, showBarangayMarkers && styles.mapToggleBtnActive]} onPress={() => setShowBarangayMarkers((prev) => !prev)}>
+              <Ionicons name="pricetag-outline" size={17} color={showBarangayMarkers ? "#FFFFFF" : "#14532D"} />
+              <Text style={[styles.mapToggleText, showBarangayMarkers && styles.mapToggleTextActive]}>Barangay Labels</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity activeOpacity={0.88} style={[styles.mapToggleBtn, showIncidentMarkers && styles.mapToggleBtnActive]} onPress={() => setShowIncidentMarkers((prev) => !prev)}>
+              <Ionicons name="warning-outline" size={17} color={showIncidentMarkers ? "#FFFFFF" : "#14532D"} />
+              <Text style={[styles.mapToggleText, showIncidentMarkers && styles.mapToggleTextActive]}>Incident Pins</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.panelNote}>These controls only affect Incident Reporting. Evac Places keeps incident pins hidden.</Text>
+        </View>
+      </>
+    )}
+  </ScrollView>
+)}
 
         {activeModule === "flood" && (
           <ScrollView showsVerticalScrollIndicator={false}>
@@ -2234,12 +3368,51 @@ function ModulePanel({
 
         {activeModule === "evac" && (
           <ScrollView showsVerticalScrollIndicator={false}>
-            <PanelHeader
-              title="Evac Place"
-              meta="Evacuation centers and dynamic pathfinding"
-              onBack={onBack}
-            />
+            {!isNavigating && (
+              <PanelHeader
+                title="Evac Place"
+                meta="Evacuation centers and dynamic pathfinding"
+                onBack={onBack}
+              />
+            )}
 
+            {isNavigating && (
+              <View style={styles.wazeBottomPanel}>
+                <View style={styles.wazeBottomStats}>
+                  <View style={[styles.wazeBottomStat, styles.wazeBottomStatPrimary]}>
+                    <Ionicons name="time-outline" size={16} color="#14532D" />
+                    <Text style={styles.wazeBottomValue}>{routeETA}</Text>
+                    <Text style={styles.wazeBottomLabel}>ETA</Text>
+                  </View>
+
+                  <View style={styles.wazeBottomStat}>
+                    <Ionicons name="map-outline" size={16} color="#14532D" />
+                    <Text style={styles.wazeBottomValue}>{routeDistance}</Text>
+                    <Text style={styles.wazeBottomLabel}>How far</Text>
+                  </View>
+
+                  <View style={styles.wazeBottomStat}>
+                    <Ionicons name={travelMode === "walking" ? "walk-outline" : travelMode === "cycling" ? "bicycle-outline" : "car-outline"} size={16} color="#14532D" />
+                    <Text style={styles.wazeBottomValue}>
+                      {navigationTopSummary.travelModeLabel}
+                    </Text>
+                    <Text style={styles.wazeBottomLabel}>Mode</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.wazeStopBtn}
+                  activeOpacity={0.9}
+                  onPress={requestStopNavigation}
+                >
+                  <Ionicons name="stop-circle-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.wazeStopText}>Stop navigation</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!isNavigating && (
+              <>
             <View style={styles.panelSection}>
               <Text style={styles.sectionLabel}>Availability overview</Text>
               <View style={styles.statusSummaryRow}>
@@ -2271,6 +3444,37 @@ function ModulePanel({
             {!evac && (
               <>
                 <Text style={styles.sectionLabel}>Evacuation places</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.filterChipRow}
+                >
+                  {[
+                    ["nearest", "Nearest"],
+                    ["most-available", "Most available"],
+                    ["full", "Full"],
+                    ["has-space", "Has space"],
+                    ["barangay", "By barangay"],
+                  ].map(([key, label]) => (
+                    <TouchableOpacity
+                      key={key}
+                      style={[
+                        styles.filterChipButton,
+                        evacFilter === key && styles.filterChipButtonActive,
+                      ]}
+                      onPress={() => setEvacFilter(key)}
+                    >
+                      <Text
+                        style={[
+                          styles.filterChipText,
+                          evacFilter === key && styles.filterChipTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
                 <View style={styles.listSection}>
                   {evacPlacesByStatus.limited.length > 0 && (
                     <View style={styles.evacSection}>
@@ -2360,7 +3564,28 @@ function ModulePanel({
                   </View>
                   <View style={styles.warningChip}>
                     <Text style={styles.warningChipText}>
-                      Dynamic pathfinding uses the selected evac place
+                      {Number(evac.currentOccupants || 0)}/
+                      {Number(evac.totalCapacity ?? evac.capacityIndividual ?? 0)} occupants |{" "}
+                      {Number(
+                        evac.availableSlots ??
+                          Math.max(
+                            0,
+                            Number(evac.capacityIndividual || 0) -
+                              Number(evac.currentOccupants || 0)
+                          )
+                      )}{" "}
+                      slots available |{" "}
+                      {Number(
+                        evac.occupancyPercentage ??
+                          (evac.capacityIndividual
+                            ? Math.round(
+                                (Number(evac.currentOccupants || 0) /
+                                  Number(evac.capacityIndividual || 1)) *
+                                  100
+                              )
+                            : 0)
+                      )}
+                      %
                     </Text>
                   </View>
                 </View>
@@ -2440,7 +3665,7 @@ function ModulePanel({
                       <TouchableOpacity
                         style={styles.primaryBtn}
                         disabled={!routes.length}
-                        onPress={() => setPanelState("NAVIGATION")}
+                        onPress={startNavigation}
                       >
                         <Text style={styles.primaryText}>Go now</Text>
                       </TouchableOpacity>
@@ -2450,24 +3675,36 @@ function ModulePanel({
 
                 {panelState === "NAVIGATION" && (
                   <>
-                    <View style={styles.routeCard}>
-                      <Text style={styles.routeMain}>
-                        {routeSummary
-                          ? `${routeSummary.displayTime} - ${routeSummary.km} km`
-                          : "Navigation active"}
-                      </Text>
-                      <Text style={styles.evacMeta}>
-                        Follow the active route to the selected evacuation place.
-                      </Text>
+                    <View style={styles.navigationCompactCard}>
+                      <View style={styles.navigationMetricRow}>
+                        <View style={styles.navigationMetricBox}>
+                          <Text style={styles.navigationMetricValue}>
+                            {routeSummary ? `${routeSummary.km} km` : "--"}
+                          </Text>
+                          <Text style={styles.navigationMetricLabel}>Distance left</Text>
+                        </View>
+
+                        <View style={styles.navigationMetricBox}>
+                          <Text style={styles.navigationMetricValue}>
+                            {routeSummary
+                              ? `${Math.max(1, Math.round(Number(routeSummary.km || 0) * 1300))}`
+                              : "--"}
+                          </Text>
+                          <Text style={styles.navigationMetricLabel}>Est. steps</Text>
+                        </View>
+
+                        <View style={styles.navigationMetricBox}>
+                          <Text style={styles.navigationMetricValue}>
+                            {routeSummary?.displayTime || "--"}
+                          </Text>
+                          <Text style={styles.navigationMetricLabel}>Time</Text>
+                        </View>
+                      </View>
                     </View>
+
                     <TouchableOpacity
                       style={styles.dangerBtn}
-                      onPress={() => {
-                        setRouteRequested(false);
-                        setRoutes([]);
-                        setActiveRoute(null);
-                        setPanelState("PLACE_INFO");
-                      }}
+                      onPress={requestStopNavigation}
                     >
                       <Text style={styles.dangerText}>Stop navigation</Text>
                     </TouchableOpacity>
@@ -2475,8 +3712,47 @@ function ModulePanel({
                 )}
               </>
             )}
+              </>
+            )}
           </ScrollView>
         )}
+
+        <Modal
+          visible={showStopConfirm}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowStopConfirm(false)}
+        >
+          <View style={styles.stopModalBackdrop}>
+            <View style={styles.stopModalCard}>
+              <View style={styles.stopModalIcon}>
+                <Ionicons name="stop-circle-outline" size={28} color="#DC2626" />
+              </View>
+              <Text style={styles.stopModalTitle}>Stop Navigation</Text>
+              <Text style={styles.stopModalMessage}>
+                Do you want to stop navigation?
+              </Text>
+
+              <View style={styles.stopModalActions}>
+                <TouchableOpacity
+                  style={styles.stopModalNoBtn}
+                  activeOpacity={0.88}
+                  onPress={() => setShowStopConfirm(false)}
+                >
+                  <Text style={styles.stopModalNoText}>No</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.stopModalYesBtn}
+                  activeOpacity={0.88}
+                  onPress={performStopNavigation}
+                >
+                  <Text style={styles.stopModalYesText}>Yes</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </Animated.View>
     </KeyboardAvoidingView>
   );
@@ -2521,6 +3797,120 @@ const styles = StyleSheet.create({
     zIndex: 2200,
     elevation: 2200,
     pointerEvents: "box-none",
+  },
+
+  wazeTopOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    minHeight: 78,
+    paddingHorizontal: 14,
+    paddingTop: Platform.OS === "ios" ? 48 : 18,
+    paddingBottom: 10,
+    backgroundColor: "rgba(255,255,255,0.97)",
+    zIndex: 2500,
+    elevation: 2500,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(220,231,225,0.95)",
+    shadowColor: "#0f2319",
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 },
+  },
+
+  wazeTopTurnIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "#EAF4EE",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  wazeTopCopy: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+  },
+
+  wazeTopInstruction: {
+    color: "#10251B",
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+
+  wazeTopRoad: {
+    marginTop: 2,
+    color: "#166534",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  wazeTopDistance: {
+    color: "#14532D",
+    fontSize: 18,
+    fontWeight: "900",
+    minWidth: 64,
+    textAlign: "right",
+  },
+
+  navigationRecenterButton: {
+    position: "absolute",
+    right: 16,
+    top: -68,
+    width: 56,
+    height: 56,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DDE9E3",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f2319",
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 8,
+  },
+
+  navigationArrowShell: {
+    width: 58,
+    height: 58,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  navigationArrowHalo: {
+    position: "absolute",
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: "rgba(14,165,233,0.18)",
+    borderWidth: 2,
+    borderColor: "rgba(14,165,233,0.28)",
+  },
+
+  navigationArrow: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#06B6D4",
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#083344",
+    shadowOpacity: 0.24,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 7,
+    zIndex: 2,
   },
 
   switcher: {
@@ -2624,17 +4014,330 @@ const styles = StyleSheet.create({
   },
 
   dangerBtn: {
-    backgroundColor: "#fee2e2",
+    backgroundColor: "#b91c1c",
     padding: 15,
     borderRadius: 14,
     alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
     borderWidth: 1,
-    borderColor: "#fca5a5",
+    borderColor: "#991b1b",
   },
 
   dangerText: {
-    color: "#991b1b",
+    color: "#ffffff",
     fontWeight: "800",
+  },
+
+  navigationTopCard: {
+    marginBottom: 12,
+    overflow: "hidden",
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E7DF",
+    shadowColor: "#0f2319",
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+
+  wazeInstructionBar: {
+    minHeight: 78,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: "#14532D",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  wazeTurnIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  wazeInstructionTextWrap: {
+    flex: 1,
+  },
+
+  wazeInstructionText: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: "900",
+  },
+
+  wazeInstructionSubtext: {
+    marginTop: 3,
+    color: "rgba(255,255,255,0.78)",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  wazeTripCard: {
+    margin: 12,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: "#F8FBF9",
+    borderWidth: 1,
+    borderColor: "#E1ECE6",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  wazeEtaBlock: {
+    minWidth: 88,
+    alignItems: "flex-start",
+  },
+
+  wazeEtaValue: {
+    color: "#10251B",
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: "900",
+  },
+
+  wazeEtaLabel: {
+    marginTop: 2,
+    color: "#64756B",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  wazeDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    backgroundColor: "#DDE9E3",
+  },
+
+  wazeTripStat: {
+    flex: 1,
+  },
+
+  wazeTripValue: {
+    color: "#14532D",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  wazeTripLabel: {
+    marginTop: 3,
+    color: "#64756B",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+
+  wazeDestinationRow: {
+    marginHorizontal: 12,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  wazeDestinationText: {
+    flex: 1,
+    color: "#10251B",
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "900",
+  },
+
+  wazeStatusPill: {
+    alignSelf: "flex-start",
+    marginHorizontal: 12,
+    marginBottom: 12,
+    paddingHorizontal: 10,
+    minHeight: 30,
+    borderRadius: 999,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#DCFCE7",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+
+  wazeStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#22C55E",
+  },
+
+  wazeStatusText: {
+    color: "#166534",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  wazeStopBtn: {
+    marginTop: 14,
+    minHeight: 56,
+    borderRadius: 20,
+    backgroundColor: "#D92D20",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    shadowColor: "#7F1D1D",
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 7,
+  },
+
+  wazeStopText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+
+  wazeBottomPanel: {
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+
+  wazeBottomStats: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  wazeBottomStat: {
+    flex: 1,
+    minHeight: 82,
+    borderRadius: 20,
+    backgroundColor: "#FAFCFB",
+    borderWidth: 1,
+    borderColor: "#DDE9E3",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 9,
+    shadowColor: "#0f2319",
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+
+  wazeBottomStatPrimary: {
+    backgroundColor: "#EAF7EF",
+    borderColor: "#BFE7CB",
+  },
+
+  wazeBottomValue: {
+    marginTop: 4,
+    color: "#10251B",
+    fontSize: 15,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+
+  wazeBottomLabel: {
+    marginTop: 3,
+    color: "#64756B",
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+
+  navigationTopHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 12,
+  },
+
+  navigationIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#14532D",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  navigationTitleBlock: {
+    flex: 1,
+  },
+
+  navigationEyebrow: {
+    color: "#64756B",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+
+  navigationDestination: {
+    marginTop: 2,
+    color: "#10251B",
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "900",
+  },
+
+  navigationStatusText: {
+    marginTop: 10,
+    color: "#52645A",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+
+  navigationCompactCard: {
+    marginTop: 4,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: "#f8fbf9",
+    borderWidth: 1,
+    borderColor: "#dce7e1",
+  },
+
+  navigationMetricRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+
+  navigationMetricBox: {
+    flex: 1,
+    minHeight: 62,
+    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#e5eee8",
+    paddingHorizontal: 6,
+  },
+
+  navigationMetricValue: {
+    color: "#14532d",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  navigationMetricLabel: {
+    marginTop: 4,
+    color: "#64756b",
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "center",
   },
 
   disabledBtn: {
@@ -2643,16 +4346,16 @@ const styles = StyleSheet.create({
 
   panelWrap: {
     position: "absolute",
-    left: 6,
-    right: 6,
-    bottom: 10,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 1000,
     elevation: 1000,
     pointerEvents: "box-none",
   },
 
   panel: {
-    maxHeight: 492,
+    maxHeight: Math.min(SCREEN_HEIGHT * 0.86, 720),
     backgroundColor: "rgba(255,255,255,0.99)",
     borderRadius: 24,
     paddingHorizontal: 16,
@@ -2667,19 +4370,39 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 
+  navigationPanelSurface: {
+    height: NAV_PANEL_HEIGHT,
+    maxHeight: NAV_PANEL_HEIGHT,
+    backgroundColor: "rgba(255,255,255,0.98)",
+    borderColor: "rgba(221,233,227,0.95)",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingTop: 0,
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    overflow: "visible",
+    shadowColor: "#0f2319",
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    elevation: 18,
+  },
+
   dragZone: {
-    minHeight: 32,
+    minHeight: 58,
     alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: -16,
+    marginHorizontal: -18,
     marginBottom: 2,
   },
 
   handle: {
-    width: 48,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "#cbd5ce",
+    width: 86,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#8EA69A",
     alignSelf: "center",
   },
 
@@ -3140,6 +4863,37 @@ barangayIncidentBadgeText: {
     textTransform: "uppercase",
   },
 
+  filterChipRow: {
+    gap: 8,
+    paddingBottom: 10,
+  },
+
+  filterChipButton: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DCE7E1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  filterChipButtonActive: {
+    backgroundColor: "#14532D",
+    borderColor: "#14532D",
+  },
+
+  filterChipText: {
+    color: "#14532D",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  filterChipTextActive: {
+    color: "#FFFFFF",
+  },
+
   evacCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -3369,6 +5123,19 @@ barangayIncidentBadgeText: {
     fontWeight: "600",
   },
 
+  incidentPhotoRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+  },
+
+  incidentPhotoThumb: {
+    width: 64,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: "#E5E7EB",
+  },
+
   incidentLevelChip: {
     marginLeft: 8,
     borderRadius: 999,
@@ -3473,6 +5240,275 @@ barangayIncidentBadgeText: {
     color: "#111827",
     fontSize: 14,
     fontWeight: "800",
+  },
+
+
+  incidentToggleCard: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: "#F8FBF7",
+    borderWidth: 1,
+    borderColor: "#DCE9D6",
+  },
+
+  incidentToggleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+
+  incidentToggleEyebrow: {
+    color: "#14532D",
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  incidentToggleTitle: {
+    marginTop: 3,
+    color: "#10251B",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  incidentToggleRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+
+  incidentToggleBtn: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+
+  incidentToggleBtnActive: {
+    backgroundColor: "#14532D",
+    borderColor: "#14532D",
+  },
+
+  incidentToggleText: {
+    color: "#14532D",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  incidentToggleTextActive: {
+    color: "#FFFFFF",
+  },
+
+  debugStatusCard: {
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  debugStatusCardActive: {
+    backgroundColor: "#14532D",
+    borderColor: "#14532D",
+  },
+
+  debugStatusText: {
+    flex: 1,
+    color: "#14532D",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+
+  debugStatusTextActive: {
+    color: "#FFFFFF",
+  },
+
+  locationAllowedCard: {
+    minHeight: 42,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 12,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  locationAllowedText: {
+    flex: 1,
+    color: "#166534",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
+
+  mapToggleGrid: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  mapToggleBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+
+  mapToggleBtnActive: {
+    backgroundColor: "#14532D",
+    borderColor: "#14532D",
+  },
+
+  mapToggleText: {
+    color: "#14532D",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  mapToggleTextActive: {
+    color: "#FFFFFF",
+  },
+
+  addressPreviewCard: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "#F7FAF8",
+    borderWidth: 1,
+    borderColor: "#E4ECE7",
+  },
+
+  addressPreviewLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#647067",
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+
+  addressPreviewText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#10251B",
+    fontWeight: "700",
+  },
+
+  stopModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.48)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+
+  stopModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 26,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#F1D6D6",
+    padding: 20,
+    alignItems: "center",
+    shadowColor: "#7F1D1D",
+    shadowOpacity: 0.2,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 18,
+  },
+
+  stopModalIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 22,
+    backgroundColor: "#FEE2E2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+
+  stopModalTitle: {
+    color: "#10251B",
+    fontSize: 20,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+
+  stopModalMessage: {
+    marginTop: 8,
+    color: "#647067",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+
+  stopModalActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 18,
+    width: "100%",
+  },
+
+  stopModalNoBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: "#F8FBF9",
+    borderWidth: 1,
+    borderColor: "#DDE9E3",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stopModalNoText: {
+    color: "#14532D",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  stopModalYesBtn: {
+    flex: 1.15,
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: "#DC2626",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#7F1D1D",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 4,
+  },
+
+  stopModalYesText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
   },
 
   modalBackdrop: {

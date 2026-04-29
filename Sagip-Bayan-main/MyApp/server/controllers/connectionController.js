@@ -42,6 +42,74 @@ async function addNotification(userId, notification) {
   });
 }
 
+/**
+ * Sends safety notifications to ALL OTHER MEMBERS in every connection
+ * where the current user belongs.
+ *
+ * Example:
+ * Connection ABC123 has A, B, C.
+ * If A marks SAFE:
+ * - B gets notification
+ * - C gets notification
+ * - A does not get duplicate self notification
+ */
+async function notifyConnectionMembersSafetyUpdate(user, status, message = "") {
+  if (!user?._id) return;
+
+  const connections = await ConnectionModel.find({
+    members: user._id,
+  }).select("_id code creator members");
+
+  if (!connections.length) return;
+
+  const actorName =
+    [user.fname, user.lname].filter(Boolean).join(" ").trim() ||
+    user.username ||
+    "A member";
+
+  const isSafe = status === "SAFE";
+  const notificationType = isSafe ? "safety_safe" : "safety_not_safe";
+
+  const baseMessage = isSafe
+    ? `${actorName} marked themselves as safe.`
+    : `${actorName} marked themselves as not safe and may need help.`;
+
+  const cleanMessage = String(message || "").trim();
+
+  const notificationMessage = cleanMessage
+    ? `${baseMessage} Message: ${cleanMessage}`
+    : baseMessage;
+
+  const jobs = [];
+
+  connections.forEach((connection) => {
+    const members = Array.isArray(connection.members) ? connection.members : [];
+
+    members.forEach((memberId) => {
+      if (!memberId) return;
+
+      // Do not notify the same user who marked their own status.
+      if (idsMatch(memberId, user._id)) return;
+
+      jobs.push(
+        addNotification(memberId, {
+          type: notificationType,
+          message: notificationMessage,
+          connectionId: connection._id,
+          actorUserId: user._id,
+          actorName,
+          actorUsername: user.username || "",
+          actorAvatar: user.avatar || "",
+          connectionCode: connection.code || "",
+          actionable: false,
+        })
+      );
+    });
+  });
+
+  await Promise.all(jobs);
+}
+
 async function resolveNotificationActionTarget(connectionId, userId) {
   const connection = await ConnectionModel.findById(connectionId);
   if (!connection) {
@@ -56,22 +124,26 @@ async function resolveNotificationActionTarget(connectionId, userId) {
 }
 
 async function markOwnerRequestHandled(ownerId, connectionId, memberId) {
-  await UserModel.findByIdAndUpdate(ownerId, {
-    $set: {
-      "notifications.$[notif].handledAt": new Date(),
-      "notifications.$[notif].actionable": false,
-      "notifications.$[notif].read": true,
-    },
-  }, {
-    arrayFilters: [
-      {
-        "notif.type": "CONNECTION_REQUEST",
-        "notif.connectionId": new mongoose.Types.ObjectId(connectionId),
-        "notif.actorUserId": new mongoose.Types.ObjectId(memberId),
-        "notif.handledAt": null,
+  await UserModel.findByIdAndUpdate(
+    ownerId,
+    {
+      $set: {
+        "notifications.$[notif].handledAt": new Date(),
+        "notifications.$[notif].actionable": false,
+        "notifications.$[notif].read": true,
       },
-    ],
-  });
+    },
+    {
+      arrayFilters: [
+        {
+          "notif.type": "CONNECTION_REQUEST",
+          "notif.connectionId": new mongoose.Types.ObjectId(connectionId),
+          "notif.actorUserId": new mongoose.Types.ObjectId(memberId),
+          "notif.handledAt": null,
+        },
+      ],
+    }
+  );
 }
 
 async function ensureUserExists(userId) {
@@ -109,10 +181,13 @@ const markSafe = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    await notifyConnectionMembersSafetyUpdate(user, "SAFE", message);
+
     return res.json({
       message: "Safety status updated",
       safetyStatus: user.safetyStatus,
       safetyMessage: user.safetyMessage,
+      safetyUpdatedAt: user.safetyUpdatedAt,
     });
   } catch (err) {
     console.error("Mark safe error:", err);
@@ -139,9 +214,13 @@ const markNotSafe = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    await notifyConnectionMembersSafetyUpdate(user, "NOT_SAFE", message);
+
     return res.json({
       message: "Safety status updated",
       safetyStatus: user.safetyStatus,
+      safetyMessage: user.safetyMessage,
+      safetyUpdatedAt: user.safetyUpdatedAt,
     });
   } catch (err) {
     console.error("Mark not safe error:", err);
@@ -274,7 +353,7 @@ const getConnectionMembers = async (req, res) => {
 
     const connection = await ConnectionModel.findById(connectionId).populate(
       "members",
-      "fname lname username avatar location safetyStatus safetyMessage"
+      "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
     );
 
     if (!connection) {
@@ -298,7 +377,7 @@ const getUserConnections = async (req, res) => {
       .populate("creator", "fname lname username avatar")
       .populate(
         "members",
-        "fname lname username avatar location safetyStatus safetyMessage"
+        "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
       )
       .populate("pendingMembers", "fname lname username avatar");
 
@@ -324,6 +403,21 @@ const leaveConnection = async (req, res) => {
       });
     }
 
+    const leavingUser = await UserModel.findById(userId).select(
+      "fname lname username avatar"
+    );
+
+    const leavingName =
+      [leavingUser?.fname, leavingUser?.lname].filter(Boolean).join(" ").trim() ||
+      leavingUser?.username ||
+      "A member";
+
+    const remainingMemberIds = Array.isArray(connection.members)
+      ? connection.members.filter(
+          (id) => !idsMatch(id, userId) && !idsMatch(id, connection.creator)
+        )
+      : [];
+
     connection.members = connection.members.filter((id) => !idsMatch(id, userId));
     connection.pendingMembers = connection.pendingMembers.filter(
       (id) => !idsMatch(id, userId)
@@ -334,6 +428,27 @@ const leaveConnection = async (req, res) => {
     await UserModel.findByIdAndUpdate(userId, {
       $pull: { connections: connectionId },
     });
+
+    const notifyTargets = [connection.creator, ...remainingMemberIds].filter(
+      (id, index, arr) =>
+        id && arr.findIndex((existingId) => idsMatch(existingId, id)) === index
+    );
+
+    await Promise.all(
+      notifyTargets.map((targetUserId) =>
+        addNotification(targetUserId, {
+          type: "CONNECTION_LEFT",
+          message: `${leavingName} left connection ${connection.code}.`,
+          connectionId: connection._id,
+          actorUserId: leavingUser?._id || null,
+          actorName: leavingName,
+          actorUsername: leavingUser?.username || "",
+          actorAvatar: leavingUser?.avatar || "",
+          connectionCode: connection.code,
+          actionable: false,
+        })
+      )
+    );
 
     return res.json({ message: "You have left the connection" });
   } catch (err) {
@@ -379,6 +494,7 @@ const approveMember = async (req, res) => {
       connectionId,
       userId
     );
+
     if (error) {
       return res.status(error.status).json({ message: error.message });
     }
@@ -409,6 +525,7 @@ const approveMember = async (req, res) => {
     await UserModel.findByIdAndUpdate(memberId, {
       $addToSet: { connections: connection._id },
     });
+
     await markOwnerRequestHandled(userId, connectionId, memberId);
 
     await addNotification(memberId, {
@@ -433,6 +550,7 @@ const rejectMember = async (req, res) => {
       connectionId,
       userId
     );
+
     if (error) {
       return res.status(error.status).json({ message: error.message });
     }
@@ -511,7 +629,7 @@ const getConnectionById = async (req, res) => {
       .populate("creator", "fname lname username avatar")
       .populate(
         "members",
-        "fname lname username avatar location safetyStatus safetyMessage"
+        "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
       )
       .populate("pendingMembers", "fname lname username avatar");
 

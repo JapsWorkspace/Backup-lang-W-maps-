@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,6 +14,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 
 import api from "../lib/api";
+import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import { getPasswordError } from "./utils/validation";
 
 export default function PasswordReset({ route, navigation }) {
@@ -23,6 +25,7 @@ export default function PasswordReset({ route, navigation }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
   const passwordError = getPasswordError(newPassword);
   const confirmError =
@@ -68,7 +71,11 @@ export default function PasswordReset({ route, navigation }) {
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.container}>
+        <ScrollView
+          ref={scrollRef}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.container}
+        >
           <View style={styles.card}>
             <View style={styles.iconCircle}>
               <Ionicons name="lock-closed-outline" size={24} color="#14532D" />
@@ -83,6 +90,9 @@ export default function PasswordReset({ route, navigation }) {
               secureTextEntry={!showPassword}
               value={newPassword}
               onChangeText={setNewPassword}
+              onFocus={() => scrollToInput("newPassword")}
+              onLayout={registerInput("newPassword")}
+              maxLength={64}
               style={styles.input}
               placeholderTextColor="#7b867f"
             />
@@ -95,6 +105,9 @@ export default function PasswordReset({ route, navigation }) {
               secureTextEntry={!showPassword}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
+              onFocus={() => scrollToInput("confirmPassword")}
+              onLayout={registerInput("confirmPassword")}
+              maxLength={64}
               style={styles.input}
               placeholderTextColor="#7b867f"
             />
@@ -124,7 +137,7 @@ export default function PasswordReset({ route, navigation }) {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

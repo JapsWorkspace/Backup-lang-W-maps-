@@ -60,9 +60,36 @@ const PostingGuidelineSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+
+    viewedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+
+    likedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
   },
   { timestamps: true }
 );
+
+PostingGuidelineSchema.virtual("viewCount").get(function () {
+  return Array.isArray(this.viewedBy) ? this.viewedBy.length : this.views || 0;
+});
+
+PostingGuidelineSchema.virtual("likeCount").get(function () {
+  return Array.isArray(this.likedBy) ? this.likedBy.length : 0;
+});
+
+PostingGuidelineSchema.set("toJSON", { virtuals: true });
+PostingGuidelineSchema.set("toObject", { virtuals: true });
+
+PostingGuidelineSchema.index({ status: 1, category: 1, createdAt: -1 });
 
 // Auto-generate slug before saving
 PostingGuidelineSchema.pre("save", async function () {

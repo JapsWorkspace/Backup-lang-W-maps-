@@ -24,6 +24,8 @@ const placeSchema = new mongoose.Schema(
     capacityIndividual: { type: Number, required: true, min: 0 },
     capacityFamily: { type: Number, required: true, min: 0 },
     bedCapacity: { type: Number, default: 0, min: 0 },
+    currentOccupants: { type: Number, default: 0, min: 0 },
+    currentFamilies: { type: Number, default: 0, min: 0 },
 
     // Infrastructure
     floorArea: { type: Number, default: 0, min: 0 },
@@ -67,6 +69,18 @@ const placeSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+placeSchema.virtual("availableSlots").get(function () {
+  return Math.max(0, (this.capacityIndividual || 0) - (this.currentOccupants || 0));
+});
+
+placeSchema.virtual("occupancyPercentage").get(function () {
+  if (!this.capacityIndividual) return 0;
+  return Math.min(100, Math.round(((this.currentOccupants || 0) / this.capacityIndividual) * 100));
+});
+
+placeSchema.set("toJSON", { virtuals: true });
+placeSchema.set("toObject", { virtuals: true });
 
 placeSchema.index(
   { barangayId: 1, name: 1 },

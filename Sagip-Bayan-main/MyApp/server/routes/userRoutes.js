@@ -32,6 +32,7 @@ router.post("/verify-otp", userController.verifyOtp);
 router.put("/location/:id", userController.updateLocation);
 
 router.put("/twofactor/:id", userController.toggleTwoFactor);
+router.post("/:id/notification-token", userController.registerNotificationToken);
 router.get("/:id/notifications", userController.getUserNotifications);
 router.put("/:id/notifications/read-all", userController.markNotificationsRead);
 router.delete("/:id/notifications", userController.clearNotifications);
@@ -41,7 +42,26 @@ router.get("/:id", userController.getUserById);
 
 router.put(
   "/avatar/:id",
-  uploadAvatar.single("avatar"),
+  (req, res, next) => {
+    uploadAvatar.single("avatar")(req, res, (err) => {
+      if (err) {
+        console.error("AVATAR MULTER ERROR:", {
+          message: err.message,
+          code: err.code,
+          field: err.field,
+          name: err.name,
+        });
+
+        return res.status(400).json({
+          message: err.message || "Avatar upload failed.",
+          code: err.code || null,
+          field: err.field || null,
+        });
+      }
+
+      next();
+    });
+  },
   userController.uploadAvatar
 );
 

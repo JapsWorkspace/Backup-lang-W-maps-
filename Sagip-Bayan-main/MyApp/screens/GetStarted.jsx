@@ -10,6 +10,7 @@ import {
   PanResponder,
   Easing,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import styles from "../Designs/GetStarted";
 
 export default function GetStarted({ navigation, route }) {
@@ -29,7 +30,11 @@ export default function GetStarted({ navigation, route }) {
       duration: 200,
       easing: Easing.out(Easing.quad),
       useNativeDriver: false,
-    }).start(() => {
+    }).start(async () => {
+      await AsyncStorage.multiSet([
+        ["hasSeenGetStarted", "true"],
+        ["getStartedSeen", "true"],
+      ]);
       navigation.navigate(nextRoute);
       knobX.setValue(0);
     });

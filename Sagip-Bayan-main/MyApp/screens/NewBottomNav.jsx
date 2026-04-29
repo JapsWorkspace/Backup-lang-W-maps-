@@ -5,6 +5,7 @@ import {
   Text,
   View,
   Easing,
+  StyleSheet,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -46,13 +47,10 @@ const MODULES = [
   },
 ];
 
-function DockCard({
-  item,
-  index,
-  total,
-  isActive,
-  onPress,
-}) {
+const NAV_REVEAL_PANEL_Y = 280;
+const ITEM_WIDTH = 156;
+
+function DockCard({ item, index, total, isActive, onPress }) {
   const activeAnim = useRef(new Animated.Value(isActive ? 1 : 0)).current;
   const pressAnim = useRef(new Animated.Value(0)).current;
 
@@ -209,6 +207,7 @@ export default function NewBottomNav() {
     activeMapModule,
     setActiveMapModule,
     setPanelState,
+    panelY,
     setPanelY,
     setIsBottomNavInteracting,
     setEvac,
@@ -218,12 +217,57 @@ export default function NewBottomNav() {
   } = useContext(MapContext);
 
   const [activeDockItem, setActiveDockItem] = useState("incident");
+  const [focusedIndex, setFocusedIndex] = useState(0);
+
   const moduleData = useMemo(() => MODULES, []);
+  const navAnim = useRef(new Animated.Value(1)).current;
+  const listRef = useRef(null);
 
-  if (activeMapModule) return null;
+  const shouldRevealBottomNav =
+    !activeMapModule || (typeof panelY === "number" && panelY >= NAV_REVEAL_PANEL_Y);
 
-  const openModule = (moduleKey) => {
-    setIsBottomNavInteracting(false);
+  useEffect(() => {
+    Animated.timing(navAnim, {
+      toValue: shouldRevealBottomNav ? 1 : 0,
+      duration: 220,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [navAnim, shouldRevealBottomNav]);
+
+  useEffect(() => {
+    const index = moduleData.findIndex((item) => item.key === activeMapModule);
+
+    if (index >= 0) {
+      setFocusedIndex(index);
+      setActiveDockItem(moduleData[index].key);
+
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.5,
+        });
+      });
+    }
+  }, [activeMapModule, moduleData]);
+
+  const lockBottomNavGesture = () => {
+    if (typeof setIsBottomNavInteracting === "function") {
+      setIsBottomNavInteracting(true);
+    }
+  };
+
+  const releaseBottomNavGesture = () => {
+    if (typeof setIsBottomNavInteracting === "function") {
+      setIsBottomNavInteracting(false);
+    }
+  };
+
+  const openModule = (moduleKey, index) => {
+    releaseBottomNavGesture();
+
+    setFocusedIndex(index);
     setActiveDockItem(moduleKey);
     setEvac(null);
     setRouteRequested(false);
@@ -232,20 +276,69 @@ export default function NewBottomNav() {
     setActiveMapModule(moduleKey);
     setPanelState("HIDDEN");
     setPanelY(null);
+
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.5,
+      });
+    });
+  };
+
+  const moveByOne = (direction) => {
+    lockBottomNavGesture();
+
+    const nextIndex = Math.max(
+      0,
+      Math.min(moduleData.length - 1, focusedIndex + direction)
+    );
+
+    const focused = moduleData[nextIndex];
+
+    if (!focused) {
+      releaseBottomNavGesture();
+      return;
+    }
+
+    setFocusedIndex(nextIndex);
+    setActiveDockItem(focused.key);
+
+    listRef.current?.scrollToIndex({
+      index: nextIndex,
+      animated: true,
+      viewPosition: 0.5,
+    });
+
+    setTimeout(() => {
+      releaseBottomNavGesture();
+    }, 260);
   };
 
   const handleMomentumEnd = (event) => {
     const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
-    const itemWidth = 156;
-    const index = Math.round(offsetX / itemWidth);
+    const index = Math.round(offsetX / ITEM_WIDTH);
     const safeIndex = Math.max(0, Math.min(index, moduleData.length - 1));
     const focused = moduleData[safeIndex];
+
+    setFocusedIndex(safeIndex);
 
     if (focused) {
       setActiveDockItem(focused.key);
     }
 
-    setIsBottomNavInteracting(false);
+    releaseBottomNavGesture();
+  };
+
+  const handleScrollToIndexFailed = (info) => {
+    const safeIndex = Math.max(0, Math.min(info.index || 0, moduleData.length - 1));
+
+    setTimeout(() => {
+      listRef.current?.scrollToOffset({
+        offset: safeIndex * ITEM_WIDTH,
+        animated: true,
+      });
+    }, 80);
   };
 
   const renderItem = ({ item, index }) => (
@@ -254,33 +347,147 @@ export default function NewBottomNav() {
       index={index}
       total={moduleData.length}
       isActive={activeDockItem === item.key}
-      onPress={() => openModule(item.key)}
+      onPress={() => openModule(item.key, index)}
     />
   );
 
   return (
-    <SafeAreaView edges={["bottom"]} style={styles.safe} pointerEvents="auto">
-      <View style={styles.root} pointerEvents="auto">
-        <FlatList
-          data={moduleData}
-          keyExtractor={(item) => item.key}
-          renderItem={renderItem}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.stackContent}
-          keyboardShouldPersistTaps="handled"
-          bounces={false}
-          decelerationRate="fast"
-          snapToInterval={156}
-          snapToAlignment="start"
-          onTouchStart={() => setIsBottomNavInteracting(true)}
-          onTouchEnd={() => setIsBottomNavInteracting(false)}
-          onTouchCancel={() => setIsBottomNavInteracting(false)}
-          onScrollBeginDrag={() => setIsBottomNavInteracting(true)}
-          onScrollEndDrag={() => {}}
-          onMomentumScrollEnd={handleMomentumEnd}
-        />
-      </View>
-    </SafeAreaView>
+    <Animated.View
+      pointerEvents={shouldRevealBottomNav ? "auto" : "none"}
+      style={[
+        localStyles.overlay,
+        {
+          opacity: navAnim,
+          transform: [
+            {
+              translateY: navAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [120, 0],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <SafeAreaView edges={["bottom"]} style={styles.safe} pointerEvents="box-none">
+        <View
+          style={styles.root}
+          pointerEvents="auto"
+          onTouchStart={lockBottomNavGesture}
+          onTouchEnd={releaseBottomNavGesture}
+          onTouchCancel={releaseBottomNavGesture}
+        >
+          <View style={localStyles.navFrame}>
+            <Pressable
+              onPress={() => moveByOne(-1)}
+              disabled={focusedIndex <= 0}
+              style={({ pressed }) => [
+                localStyles.arrowButton,
+                focusedIndex <= 0 && localStyles.arrowButtonDisabled,
+                pressed && focusedIndex > 0 && localStyles.arrowButtonPressed,
+              ]}
+            >
+              <Ionicons
+                name="chevron-back"
+                size={21}
+                color={focusedIndex <= 0 ? "#94a3b8" : "#14532d"}
+              />
+            </Pressable>
+
+            <FlatList
+              ref={listRef}
+              data={moduleData}
+              keyExtractor={(item) => item.key}
+              renderItem={renderItem}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.stackContent}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
+              decelerationRate="fast"
+              snapToInterval={ITEM_WIDTH}
+              snapToAlignment="start"
+              onTouchStart={lockBottomNavGesture}
+              onTouchEnd={releaseBottomNavGesture}
+              onTouchCancel={releaseBottomNavGesture}
+              onScrollBeginDrag={lockBottomNavGesture}
+              onScrollEndDrag={() => {}}
+              onMomentumScrollEnd={handleMomentumEnd}
+              onScrollToIndexFailed={handleScrollToIndexFailed}
+              getItemLayout={(_, index) => ({
+                length: ITEM_WIDTH,
+                offset: ITEM_WIDTH * index,
+                index,
+              })}
+              style={localStyles.list}
+            />
+
+            <Pressable
+              onPress={() => moveByOne(1)}
+              disabled={focusedIndex >= moduleData.length - 1}
+              style={({ pressed }) => [
+                localStyles.arrowButton,
+                focusedIndex >= moduleData.length - 1 && localStyles.arrowButtonDisabled,
+                pressed &&
+                  focusedIndex < moduleData.length - 1 &&
+                  localStyles.arrowButtonPressed,
+              ]}
+            >
+              <Ionicons
+                name="chevron-forward"
+                size={21}
+                color={focusedIndex >= moduleData.length - 1 ? "#94a3b8" : "#14532d"}
+              />
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    </Animated.View>
   );
 }
+
+const localStyles = StyleSheet.create({
+  overlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 999,
+    elevation: 999,
+  },
+
+  navFrame: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+  },
+
+  list: {
+    flex: 1,
+  },
+
+  arrowButton: {
+    width: 42,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(20,83,45,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f2a19",
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+
+  arrowButtonPressed: {
+    transform: [{ scale: 0.96 }],
+    backgroundColor: "#dcfce7",
+  },
+
+  arrowButtonDisabled: {
+    opacity: 0.48,
+  },
+});

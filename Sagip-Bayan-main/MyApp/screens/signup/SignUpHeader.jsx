@@ -2,15 +2,17 @@ import { View, Text, TouchableOpacity } from "react-native";
 import styles from "../../Designs/SignUpHeader";
 
 const STEP_TITLES = [
-  "Lets set up your profile",
-  "Lets set up a security",
+  "Let’s set up your profile",
+  "Let’s set up your address",
+  "Let’s set up your security",
   "Mobile registration",
 ];
+
+const STEP_COUNT = 4;
 
 export default function SignUpHeader({ step, onBack }) {
   return (
     <View style={styles.container}>
-      {/* Top row */}
       <View style={styles.topRow}>
         <TouchableOpacity onPress={onBack}>
           <Text style={styles.backText}>←</Text>
@@ -18,13 +20,11 @@ export default function SignUpHeader({ step, onBack }) {
 
         <Text style={styles.headerTitle}>Register Account</Text>
 
-        {/* spacer for symmetry */}
         <View style={{ width: 24 }} />
       </View>
 
-      {/* Progress Indicators */}
       <View style={styles.progressRow}>
-        {[0, 1, 2].map((i) => (
+        {Array.from({ length: STEP_COUNT }).map((_, i) => (
           <View
             key={i}
             style={[
@@ -35,9 +35,8 @@ export default function SignUpHeader({ step, onBack }) {
         ))}
       </View>
 
-      {/* Step Title */}
       <Text style={styles.stepTitle}>
-        {STEP_TITLES[step]}
+        {STEP_TITLES[step] || STEP_TITLES[0]}
       </Text>
     </View>
   );

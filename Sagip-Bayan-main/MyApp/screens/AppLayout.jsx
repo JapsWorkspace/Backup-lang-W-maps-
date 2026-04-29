@@ -20,35 +20,9 @@ import AppTopBar from "./components/AppTopBar";
 import AppDrawer from "./components/AppDrawer";
 import LogoutModal from "./components/LogoutModal";
 import { safeDisplayText } from "./utils/validation";
+import api from "../lib/api";
 
 const MAP_UI_SCREENS = new Set(["Map", "Connection"]);
-
-/* =========================
-   NAVIGATION LEGEND (UI ONLY)
-========================= */
-function NavigationLegend({ destination }) {
-  return (
-    <View style={styles.legend}>
-      <View style={styles.legendRow}>
-        <View style={styles.legendItem}>
-          <View style={styles.dotBlue} />
-          <Text style={styles.legendText}>You</Text>
-        </View>
-
-        <View style={styles.connector}>
-          <View style={styles.line} />
-        </View>
-
-        <View style={styles.legendItem}>
-          <View style={styles.dotGreen} />
-          <Text style={styles.legendText} numberOfLines={1}>
-            {destination || "Destination"}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
 
 export default function AppLayout({
   children,
@@ -84,14 +58,11 @@ export default function AppLayout({
 
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugBusy, setDebugBusy] = useState(false);
+  const [debugResult, setDebugResult] = useState(null);
 
   const isTopUiAllowedScreen = MAP_UI_SCREENS.has(currentScreen);
-
-  const showLegend =
-    isTopUiAllowedScreen &&
-    panelState === "NAVIGATION" &&
-    isFocused &&
-    !drawerOpen;
 
   const showSearchBar =
     isTopUiAllowedScreen &&
@@ -118,37 +89,77 @@ export default function AppLayout({
     setActiveRoute(null);
   };
 
+  const runDebugCheck = async () => {
+    setDebugOpen(true);
+    setDebugBusy(true);
+    setDebugResult(null);
+
+    try {
+      const [health, diagnostics, incidents, evacs, guidelines] = await Promise.all([
+        api.get("/health"),
+        api.get("/api/mobile-debug"),
+        api.get("/incident/getIncidents"),
+        api.get("/evacs"),
+        api.get("/api/guidelines"),
+      ]);
+
+      setDebugResult({
+        ok: true,
+        lines: [
+          health?.data?.ok ? "Connected to server" : "Backend responded unexpectedly",
+          diagnostics?.data?.message || "API status returned",
+          Array.isArray(incidents.data)
+            ? incidents.data.length
+              ? `Data fetching ok: ${incidents.data.length} accepted incidents`
+              : "API returned no data for accepted incidents"
+            : "Incident API returned unexpected data",
+          Array.isArray(evacs.data)
+            ? `Evacuation centers loaded: ${evacs.data.length}`
+            : "Evacuation API returned unexpected data",
+          Array.isArray(guidelines.data)
+            ? `Published MDRRMO posts loaded: ${guidelines.data.length}`
+            : "Guideline API returned unexpected data",
+          "Notification token registration endpoint is available at /user/:id/notification-token",
+        ],
+      });
+    } catch (err) {
+      setDebugResult({
+        ok: false,
+        lines: [
+          "Failed to connect",
+          err?.response?.data?.message || err?.message || "Unknown connection error",
+        ],
+      });
+    } finally {
+      setDebugBusy(false);
+    }
+  };
+
   return (
     <View style={styles.root}>
       <View style={styles.content}>{children}</View>
 
       {Platform.OS === "android" && <View pointerEvents="none" style={styles.androidNavBackdrop} />}
 
-      {showLegend ? (
-        <View style={styles.topOverlay}>
-          <NavigationLegend destination={evac?.name} />
-        </View>
-      ) : (
-        showSearchBar && (
-          <AppTopBar
-            showSearch
-            onSearchChange={search}
-            suggestions={suggestions}
-            onSelectSuggestion={(place) => {
-              clear();
-              navigation.navigate("AppShell", {
-                screen: "Map",
-                params: { place },
-              });
-            }}
-            onMenuPress={() => setDrawerOpen(true)}
-            onNotificationPress={() => {
-              setNotificationsOpen((prev) => !prev);
-              markAllRead();
-            }}
-            notificationCount={unreadCount}
-          />
-        )
+      {showSearchBar && (
+        <AppTopBar
+          showSearch
+          onSearchChange={search}
+          suggestions={suggestions}
+          onSelectSuggestion={(place) => {
+            clear();
+            navigation.navigate("AppShell", {
+              screen: "Map",
+              params: { place },
+            });
+          }}
+          onMenuPress={() => setDrawerOpen(true)}
+          onNotificationPress={() => {
+            setNotificationsOpen((prev) => !prev);
+            markAllRead();
+          }}
+          notificationCount={unreadCount}
+        />
       )}
 
       {notificationsOpen && !drawerOpen && (
@@ -175,6 +186,19 @@ export default function AppLayout({
           }}
         />
       )}
+
+      {showSearchBar && (
+        <TouchableOpacity style={styles.debugFab} onPress={runDebugCheck}>
+          <Ionicons name="bug-outline" size={18} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
+
+      <DebugModal
+        visible={debugOpen}
+        busy={debugBusy}
+        result={debugResult}
+        onClose={() => setDebugOpen(false)}
+      />
 
       {drawerOpen && (
         <AppDrawer
@@ -206,6 +230,45 @@ export default function AppLayout({
         onConfirm={confirmLogout}
       />
     </View>
+  );
+}
+
+function DebugModal({ visible, busy, result, onClose }) {
+  if (!visible) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.notificationModalBackdrop}>
+        <View style={styles.notificationModalCard}>
+          <View style={styles.notificationModalHeader}>
+            <View style={styles.notificationModalIcon}>
+              <Ionicons name="bug-outline" size={20} color="#14532D" />
+            </View>
+            <TouchableOpacity style={styles.notificationModalClose} onPress={onClose}>
+              <Ionicons name="close" size={18} color="#334155" />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.notificationModalTitle}>Connection debug</Text>
+          <Text style={styles.notificationModalMessage}>
+            {busy ? "Checking backend, API data, and notification registration path..." : ""}
+          </Text>
+          {result?.lines?.map((line, index) => (
+            <Text
+              key={`${line}-${index}`}
+              style={[
+                styles.debugLine,
+                result.ok ? styles.debugLineOk : styles.debugLineError,
+              ]}
+            >
+              {line}
+            </Text>
+          ))}
+          <TouchableOpacity style={styles.notificationModalDone} onPress={onClose}>
+            <Text style={styles.notificationModalDoneText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -567,6 +630,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
+  },
+
+  debugFab: {
+    position: "absolute",
+    top: 104,
+    right: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#14532D",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6600,
+    elevation: 6600,
+  },
+
+  debugLine: {
+    alignSelf: "stretch",
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+
+  debugLineOk: {
+    color: "#166534",
+  },
+
+  debugLineError: {
+    color: "#991B1B",
   },
 
   notificationHeader: {

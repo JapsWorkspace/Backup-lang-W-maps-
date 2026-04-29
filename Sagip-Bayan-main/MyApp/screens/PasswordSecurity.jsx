@@ -10,12 +10,18 @@ import {
   Switch,
   ScrollView,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
 import styles, { COLORS } from "../Designs/PasswordSecurity";
 import { getPasswordError } from "./utils/validation";
+
+function getUserId(user) {
+  return user?._id || user?.id || user?.userId || "";
+}
 
 export default function PasswordSecurity({ navigation }) {
   const { user, setUser } = useContext(UserContext);
@@ -23,91 +29,185 @@ export default function PasswordSecurity({ navigation }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
   const [newPasswordError, setNewPasswordError] = useState("");
   const [confirmPasswordError, setConfirmPasswordError] = useState("");
-  const [twoFactorEnabled, setTwoFactorEnabled] = useState(user?.twoFactorEnabled || false);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(
+    Boolean(user?.twoFactorEnabled)
+  );
+
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [submitError, setSubmitError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isToggling2FA, setIsToggling2FA] = useState(false);
+
+  const userId = getUserId(user);
 
   const handleNewPassword = (text) => {
     const cleanText = text.trim();
+
     setNewPassword(cleanText);
     setSubmitError("");
     setNewPasswordError(getPasswordError(cleanText));
 
     if (confirmPassword && cleanText !== confirmPassword) {
       setConfirmPasswordError("Passwords do not match.");
+    } else {
+      setConfirmPasswordError("");
     }
-    else setConfirmPasswordError("");
   };
 
   const handleConfirmPassword = (text) => {
     const cleanText = text.trim();
+
     setConfirmPassword(cleanText);
     setSubmitError("");
-    if (cleanText.length === 0) setConfirmPasswordError("Confirm password is required.");
-    else if (cleanText !== newPassword) setConfirmPasswordError("Passwords do not match.");
-    else setConfirmPasswordError("");
+
+    if (cleanText.length === 0) {
+      setConfirmPasswordError("Confirm password is required.");
+    } else if (cleanText !== newPassword) {
+      setConfirmPasswordError("Passwords do not match.");
+    } else {
+      setConfirmPasswordError("");
+    }
   };
 
-  const updatePassword = () => {
+  const updatePassword = async () => {
     const cleanCurrentPassword = currentPassword.trim();
+
+    setSubmitError("");
+
+    if (!userId) {
+      setSubmitError("Missing user ID. Please log in again.");
+      Alert.alert("Update failed", "Missing user ID. Please log in again.");
+      return;
+    }
 
     if (!cleanCurrentPassword) {
       setSubmitError("Current password is required.");
       return;
     }
-    if (newPasswordError || confirmPasswordError) {
+
+    const passwordError = getPasswordError(newPassword);
+    if (passwordError) {
+      setNewPasswordError(passwordError);
       setSubmitError("Please fix the password errors first.");
       return;
     }
+
     if (!newPassword || !confirmPassword) {
       setSubmitError("Password fields cannot be empty.");
       return;
     }
+
+    if (newPassword !== confirmPassword) {
+      setConfirmPasswordError("Passwords do not match.");
+      setSubmitError("Passwords do not match.");
+      return;
+    }
+
     if (newPassword === cleanCurrentPassword) {
       setSubmitError("New password must be different from the current password.");
       return;
     }
+
     if (isSaving) return;
 
-    setIsSaving(true);
-    setSubmitError("");
+    try {
+      setIsSaving(true);
 
-    api
-      .put(`/user/update/${user.id}`, { password: newPassword })
-      .then(() => {
-        setUser({ ...user, password: newPassword });
-        setCurrentPassword("");
-        setNewPassword("");
-        setConfirmPassword("");
-        setSubmitError("");
-      })
-      .catch((error) => {
-        console.error(error);
-        setSubmitError(
-          error?.response?.data?.message || "Failed to update password."
-        );
-      })
-      .finally(() => {
-        setIsSaving(false);
+      const response = await api.put(`/user/update/${userId}`, {
+        password: newPassword,
       });
+
+      const updatedUser = response?.data || {};
+
+      setUser({
+        ...user,
+        ...updatedUser,
+        _id: updatedUser?._id || user?._id || userId,
+        id: updatedUser?.id || user?.id || userId,
+      });
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setNewPasswordError("");
+      setConfirmPasswordError("");
+      setSubmitError("");
+
+      Alert.alert("Security updated", "Your password has been updated.");
+    } catch (error) {
+      console.log("Password update failed:", {
+        url: `/user/update/${userId}`,
+        message: error?.message,
+        status: error?.response?.status,
+        data: error?.response?.data,
+      });
+
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        "Failed to update password.";
+
+      setSubmitError(message);
+      Alert.alert("Update failed", message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const toggle2FA = (value) => {
-    setTwoFactorEnabled(value);
-    api
-      .put(`/user/twofactor/${user._id}`, { enabled: value })
-      .then(() => setUser({ ...user, twoFactorEnabled: value }))
-      .catch((err) => console.error(err));
+  const toggle2FA = async (value) => {
+    if (!userId || isToggling2FA) {
+      if (!userId) {
+        Alert.alert("Update failed", "Missing user ID. Please log in again.");
+      }
+      return;
+    }
+
+    const previousValue = twoFactorEnabled;
+
+    try {
+      setIsToggling2FA(true);
+      setTwoFactorEnabled(value);
+
+      await api.put(`/user/twofactor/${userId}`, {
+        enabled: value,
+      });
+
+      setUser({
+        ...user,
+        _id: user?._id || userId,
+        id: user?.id || userId,
+        twoFactorEnabled: value,
+      });
+    } catch (err) {
+      console.log("Two-factor update failed:", {
+        url: `/user/twofactor/${userId}`,
+        message: err?.message,
+        status: err?.response?.status,
+        data: err?.response?.data,
+      });
+
+      setTwoFactorEnabled(previousValue);
+
+      Alert.alert(
+        "Update failed",
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          "Unable to update two-factor authentication."
+      );
+    } finally {
+      setIsToggling2FA(false);
+    }
   };
 
   if (!user) return <Text>No user logged in</Text>;
 
-  const matches = confirmPassword && !confirmPasswordError;
+  const matches = Boolean(confirmPassword && !confirmPasswordError);
 
   return (
     <KeyboardAvoidingView
@@ -122,27 +222,42 @@ export default function PasswordSecurity({ navigation }) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerRow}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+          >
             <Ionicons name="chevron-back" size={22} color={COLORS.green} />
           </TouchableOpacity>
+
           <View style={styles.headerCopy}>
             <Text style={styles.headerTitle}>Password & Security</Text>
-            <Text style={styles.subText}>Protect account access and sign-in recovery.</Text>
+            <Text style={styles.subText}>
+              Protect account access and sign-in recovery.
+            </Text>
           </View>
         </View>
 
         <View style={styles.securityHero}>
           <View style={styles.heroIcon}>
-            <Ionicons name="shield-checkmark-outline" size={28} color={COLORS.green} />
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={28}
+              color={COLORS.green}
+            />
           </View>
+
           <View style={styles.heroCopy}>
             <Text style={styles.heroTitle}>Security center</Text>
-            <Text style={styles.heroText}>Use a unique password and keep two-factor authentication ready for sensitive changes.</Text>
+            <Text style={styles.heroText}>
+              Use a unique password and keep two-factor authentication ready for
+              sensitive changes.
+            </Text>
           </View>
         </View>
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Change password</Text>
+
           <PasswordField
             label="Current Password"
             value={currentPassword}
@@ -153,6 +268,7 @@ export default function PasswordSecurity({ navigation }) {
             visible={showCurrentPassword}
             onToggleVisibility={() => setShowCurrentPassword((prev) => !prev)}
           />
+
           <PasswordField
             label="New Password"
             value={newPassword}
@@ -160,7 +276,11 @@ export default function PasswordSecurity({ navigation }) {
             visible={showNewPassword}
             onToggleVisibility={() => setShowNewPassword((prev) => !prev)}
           />
-          {newPasswordError ? <Text style={styles.error}>{newPasswordError}</Text> : null}
+
+          {newPasswordError ? (
+            <Text style={styles.error}>{newPasswordError}</Text>
+          ) : null}
+
           <PasswordField
             label="Confirm Password"
             value={confirmPassword}
@@ -168,18 +288,22 @@ export default function PasswordSecurity({ navigation }) {
             visible={showConfirmPassword}
             onToggleVisibility={() => setShowConfirmPassword((prev) => !prev)}
           />
-          {confirmPasswordError ? <Text style={styles.error}>{confirmPasswordError}</Text> : null}
+
+          {confirmPasswordError ? (
+            <Text style={styles.error}>{confirmPasswordError}</Text>
+          ) : null}
+
           {submitError ? <Text style={styles.error}>{submitError}</Text> : null}
 
           <View style={styles.ruleGrid}>
             <Rule checked={newPassword.length >= 8} text="8+ characters" />
             <Rule checked={/[A-Za-z]/.test(newPassword)} text="Letter" />
             <Rule checked={/[0-9]/.test(newPassword)} text="Number" />
-            <Rule checked={!!matches} text="Matches" />
+            <Rule checked={matches} text="Matches" />
           </View>
 
           <TouchableOpacity
-            style={styles.button}
+            style={[styles.button, isSaving && { opacity: 0.65 }]}
             onPress={updatePassword}
             disabled={isSaving}
           >
@@ -194,12 +318,21 @@ export default function PasswordSecurity({ navigation }) {
             <View style={styles.twoFAIcon}>
               <Ionicons name="key-outline" size={20} color={COLORS.green} />
             </View>
+
             <View style={styles.twoFACopy}>
               <Text style={styles.sectionTitle}>Two-Factor Authentication</Text>
-              <Text style={styles.subInfo}>Require a verification code when signing in.</Text>
+              <Text style={styles.subInfo}>
+                Require a verification code when signing in.
+              </Text>
             </View>
-            <Switch value={twoFactorEnabled} onValueChange={toggle2FA} />
+
+            <Switch
+              value={twoFactorEnabled}
+              onValueChange={toggle2FA}
+              disabled={isToggling2FA}
+            />
           </View>
+
           <Text style={[styles.status, twoFactorEnabled && styles.statusEnabled]}>
             {twoFactorEnabled ? "Enabled" : "Disabled"}
           </Text>
@@ -209,10 +342,17 @@ export default function PasswordSecurity({ navigation }) {
   );
 }
 
-function PasswordField({ label, value, onChangeText, visible, onToggleVisibility }) {
+function PasswordField({
+  label,
+  value,
+  onChangeText,
+  visible,
+  onToggleVisibility,
+}) {
   return (
     <View style={styles.inputWrap}>
       <Text style={styles.inputLabel}>{label}</Text>
+
       <View style={localStyles.passwordFieldShell}>
         <TextInput
           style={[styles.input, localStyles.passwordInput]}
@@ -222,6 +362,7 @@ function PasswordField({ label, value, onChangeText, visible, onToggleVisibility
           value={value}
           onChangeText={onChangeText}
         />
+
         <TouchableOpacity
           style={localStyles.passwordToggle}
           onPress={onToggleVisibility}

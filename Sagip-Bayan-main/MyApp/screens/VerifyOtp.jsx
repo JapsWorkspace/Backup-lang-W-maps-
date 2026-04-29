@@ -6,6 +6,9 @@ import {
   Button,
   StyleSheet,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from "react-native";
 
 import api from "../lib/api";
@@ -133,44 +136,52 @@ export default function VerifyOtp({ route, navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Enter OTP</Text>
-      <Text style={styles.subtitle} numberOfLines={2}>
-        {safeEmail || "Email unavailable"}
-      </Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.container}
+      >
+        <Text style={styles.title}>Enter OTP</Text>
+        <Text style={styles.subtitle} numberOfLines={2}>
+          {safeEmail || "Email unavailable"}
+        </Text>
 
-      <View style={styles.otpContainer}>
-        {otp.map((digit, index) => (
-          <TextInput
-            key={index}
-            ref={(el) => {
-              inputsRef.current[index] = el;
-            }}
-            style={styles.otpBox}
-            keyboardType="numeric"
-            maxLength={1}
-            value={digit}
-            onChangeText={(text) => handleChange(text, index)}
-          />
-        ))}
-      </View>
+        <View style={styles.otpContainer}>
+          {otp.map((digit, index) => (
+            <TextInput
+              key={index}
+              ref={(el) => {
+                inputsRef.current[index] = el;
+              }}
+              style={styles.otpBox}
+              keyboardType="numeric"
+              maxLength={1}
+              value={digit}
+              onChangeText={(text) => handleChange(text, index)}
+            />
+          ))}
+        </View>
 
-      <Text style={styles.timerText}>
-        OTP will expire in {formatTime(timeLeft)}
-      </Text>
+        <Text style={styles.timerText}>
+          OTP will expire in {formatTime(timeLeft)}
+        </Text>
 
-      <Button
-        title={isSubmitting ? "Verifying..." : "Verify OTP"}
-        onPress={handleSubmit}
-        disabled={!canSubmit}
-      />
-    </View>
+        <Button
+          title={isSubmitting ? "Verifying..." : "Verify OTP"}
+          onPress={handleSubmit}
+          disabled={!canSubmit}
+        />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: 20,

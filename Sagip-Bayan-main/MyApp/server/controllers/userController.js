@@ -9,12 +9,37 @@ function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function sanitizeText(value, max = 120) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function sanitizeUsername(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-zA-Z0-9._-]/g, "")
+    .slice(0, 30);
+}
+
+function sanitizePhone(value) {
+  return String(value || "")
+    .replace(/\D/g, "")
+    .replace(/^63/, "")
+    .replace(/^0+/, "")
+    .slice(0, 10);
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildFullAddress({ district, barangay, street }) {
+  return [street, barangay, district, "Jaen, Nueva Ecija"].filter(Boolean).join(", ");
+}
+
 /* =========================
    REGISTER
 ========================= */
-/* =========================
-   REGISTER
-========================= */const registerUser = async (req, res) => {
+const registerUser = async (req, res) => {
   try {
     const {
       fname,
@@ -23,23 +48,68 @@ function escapeRegex(value) {
       password,
       email,
       phone,
+      barangay,
+      street,
+      streetAddress,
+      address,
     } = req.body || {};
 
     if (!fname || !lname || !username || !password || !email || !phone) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // ❌ check duplicate email (IMPORTANT FIX)
-    const existingUser = await UserModel.findOne({ email });
-    if (existingUser) {
-  return res.status(400).json({
-    error: "EMAIL_EXISTS",
-    message: "Email already exists",
-  });
-}
+    const cleanEmail = normalizeEmail(email);
+    const cleanUsername = sanitizeUsername(username);
+    const cleanPhone = sanitizePhone(phone);
+    const cleanBarangay = sanitizeText(barangay, 80);
+    const cleanStreet = sanitizeText(street || streetAddress, 160);
+    const cleanAddress =
+      buildFullAddress({
+        district: "",
+        barangay: cleanBarangay,
+        street: cleanStreet,
+      }) || sanitizeText(address, 220);
+
+    const existingEmailUser = await UserModel.findOne({ email: cleanEmail });
+    if (existingEmailUser) {
+      return res.status(400).json({
+        error: "EMAIL_EXISTS",
+        message: "Email already exists",
+      });
+    }
+
+    const existingUsernameUser = await UserModel.findOne({
+      username: { $regex: new RegExp(`^${escapeRegex(cleanUsername)}$`, "i") },
+    });
+
+    if (existingUsernameUser) {
+      return res.status(400).json({
+        error: "USERNAME_EXISTS",
+        message: "Username already exists",
+      });
+    }
+
     if (password.length < 8) {
       return res.status(400).json({
         error: "Password must be at least 8 characters",
+      });
+    }
+
+    if (cleanPhone.length !== 10) {
+      return res.status(400).json({
+        error: "Phone number must contain exactly 10 digits",
+      });
+    }
+
+    if (!cleanBarangay) {
+      return res.status(400).json({
+        error: "Barangay is required",
+      });
+    }
+
+    if (!cleanStreet) {
+      return res.status(400).json({
+        error: "Street / address details are required",
       });
     }
 
@@ -48,6 +118,16 @@ function escapeRegex(value) {
 
     const newUser = new UserModel({
       ...req.body,
+      fname: sanitizeText(fname, 60),
+      lname: sanitizeText(lname, 60),
+      username: cleanUsername,
+      email: cleanEmail,
+      phone: cleanPhone,
+      phoneNumber: cleanPhone,
+      barangay: cleanBarangay,
+      street: cleanStreet,
+      streetAddress: cleanStreet,
+      address: cleanAddress,
       password: hashedPassword,
       isVerified: false,
       verificationToken,
@@ -56,28 +136,55 @@ function escapeRegex(value) {
 
     const user = await newUser.save();
 
-    // 🔥 FIXED: use REAL domain (NOT local IP)
     const baseUrl = process.env.BASE_URL || "http://localhost:8000";
+    const verificationLink = `${baseUrl}/user/verify/${verificationToken}`;
 
-    const verificationLink =
-      `${baseUrl}/user/verify/${verificationToken}`;
+    let emailSent = false;
 
-    // 🔥 IMPORTANT: actually send email
-    await sendVerificationEmail(user.email, verificationLink, user.fname);
+    try {
+      await sendVerificationEmail(user.email, verificationLink, user.fname);
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("Verification email failed:", emailErr);
+    }
 
     return res.status(201).json({
-      message: "Registration successful. Please verify your email.",
-      emailSent: true,
+      message: emailSent
+        ? "Registration successful. Please verify your email."
+        : "Registration successful, but verification email could not be sent yet.",
+      emailSent,
+      userId: user._id,
     });
-
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Registration failed" });
+    console.error("REGISTER USER ERROR:", err);
+
+    if (err?.code === 11000) {
+      const duplicateField = Object.keys(err.keyPattern || {})[0];
+
+      if (duplicateField === "email") {
+        return res.status(400).json({
+          error: "EMAIL_EXISTS",
+          message: "Email already exists",
+        });
+      }
+
+      if (duplicateField === "username") {
+        return res.status(400).json({
+          error: "USERNAME_EXISTS",
+          message: "Username already exists",
+        });
+      }
+
+      return res.status(400).json({
+        error: "DUPLICATE_FIELD",
+        message: "A unique field already exists",
+      });
+    }
+
+    return res.status(500).json({ error: "Registration failed" });
   }
 };
-/* =========================
-   VERIFY EMAIL
-========================= */
+
 /* =========================
    VERIFY EMAIL
 ========================= */
@@ -86,7 +193,7 @@ const verifyEmail = (req, res) => {
 
   UserModel.findOne({
     verificationToken: token,
-    verificationTokenExpires: { $gt: Date.now() }
+    verificationTokenExpires: { $gt: Date.now() },
   })
     .then((user) => {
       if (!user) {
@@ -110,9 +217,6 @@ const verifyEmail = (req, res) => {
 /* =========================
    USERS
 ========================= */
-/* =========================
-   USERS
-========================= */
 const getUsers = (req, res) => {
   UserModel.find()
     .then((users) => res.json(users))
@@ -133,7 +237,7 @@ const loginUser = async (req, res) => {
       .status(400)
       .json({ message: "Username and password are required" });
   }
-  
+
   try {
     const normalizedUsername = String(username).trim();
     const user =
@@ -185,27 +289,139 @@ const loginUser = async (req, res) => {
 ========================= */
 const updateUser = async (req, res) => {
   try {
-    const updateData = { ...req.body };
+    const userId = req.params.id;
+    const body = req.body || {};
 
-    if (req.body.password) {
-      updateData.password = await bcrypt.hash(req.body.password, 10);
-    }
-
-    const user = await UserModel.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    );
-
-    if (!user) {
+    const existingUser = await UserModel.findById(userId);
+    if (!existingUser) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const { password, ...safeUser } = user.toObject();
-    res.json(safeUser);
+    const updateData = {};
+
+    if (body.fname !== undefined) {
+      updateData.fname = sanitizeText(body.fname, 60);
+    }
+
+    if (body.lname !== undefined) {
+      updateData.lname = sanitizeText(body.lname, 60);
+    }
+
+    if (body.username !== undefined) {
+      const cleanUsername = sanitizeUsername(body.username);
+      if (!cleanUsername) {
+        return res.status(400).json({ message: "Invalid username." });
+      }
+
+      const usernameOwner = await UserModel.findOne({
+        _id: { $ne: userId },
+        username: { $regex: new RegExp(`^${escapeRegex(cleanUsername)}$`, "i") },
+      });
+
+      if (usernameOwner) {
+        return res.status(400).json({ message: "Username is already taken." });
+      }
+
+      updateData.username = cleanUsername;
+    }
+
+    if (body.email !== undefined) {
+      const cleanEmail = normalizeEmail(body.email);
+      if (!cleanEmail) {
+        return res.status(400).json({ message: "Invalid email." });
+      }
+
+      const emailOwner = await UserModel.findOne({
+        _id: { $ne: userId },
+        email: cleanEmail,
+      });
+
+      if (emailOwner) {
+        return res.status(400).json({ message: "Email is already in use." });
+      }
+
+      updateData.email = cleanEmail;
+    }
+
+    if (body.phone !== undefined || body.phoneNumber !== undefined) {
+      const rawPhone = body.phoneNumber ?? body.phone;
+      const cleanPhone = sanitizePhone(rawPhone);
+
+      if (rawPhone && cleanPhone.length !== 10) {
+        return res.status(400).json({
+          message: "Phone number must contain exactly 10 digits.",
+        });
+      }
+
+      updateData.phone = cleanPhone;
+      updateData.phoneNumber = cleanPhone;
+    }
+
+    const district =
+      body.district !== undefined
+        ? sanitizeText(body.district, 80)
+        : existingUser.district || "";
+
+    const barangay =
+      body.barangay !== undefined
+        ? sanitizeText(body.barangay, 80)
+        : existingUser.barangay || "";
+
+    const street =
+      body.street !== undefined
+        ? sanitizeText(body.street, 160)
+        : body.streetAddress !== undefined
+          ? sanitizeText(body.streetAddress, 160)
+          : existingUser.street || existingUser.streetAddress || "";
+
+    if (body.district !== undefined) updateData.district = district;
+    if (body.barangay !== undefined) updateData.barangay = barangay;
+    if (body.street !== undefined || body.streetAddress !== undefined) {
+      updateData.street = street;
+      updateData.streetAddress = street;
+    }
+
+    if (
+      body.address !== undefined ||
+      body.district !== undefined ||
+      body.barangay !== undefined ||
+      body.street !== undefined ||
+      body.streetAddress !== undefined
+    ) {
+      updateData.address = buildFullAddress({
+        district,
+        barangay,
+        street,
+      });
+    }
+
+    if (body.password) {
+      if (String(body.password).length < 8) {
+        return res.status(400).json({
+          message: "Password must be at least 8 characters.",
+        });
+      }
+      updateData.password = await bcrypt.hash(body.password, 10);
+    }
+
+    const user = await UserModel.findByIdAndUpdate(userId, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
+    const {
+      password,
+      otp,
+      otpExpires,
+      verificationToken,
+      verificationTokenExpires,
+      ...safeUser
+    } = user.toObject();
+
+    return res.json(safeUser);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 };
 
@@ -262,7 +478,7 @@ const sendOtp = (req, res) => {
   }
 
   UserModel.findOne({ email })
-    .then(user => {
+    .then((user) => {
       if (!user) {
         return Promise.reject({ status: 404, message: "Email not found" });
       }
@@ -275,10 +491,10 @@ const sendOtp = (req, res) => {
     .then(() => {
       res.json({ message: "OTP sent successfully" });
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(err);
       res.status(err.status || 500).json({
-        message: err.message || "Server error"
+        message: err.message || "Server error",
       });
     });
 };
@@ -286,11 +502,12 @@ const sendOtp = (req, res) => {
 const verifyOtp = (req, res) => {
   const { email, otp } = req.body;
 
-  if (!email || !otp)
+  if (!email || !otp) {
     return res.status(400).json({ message: "Email and OTP are required" });
+  }
 
   UserModel.findOne({ email })
-    .then(user => {
+    .then((user) => {
       if (!user) throw { status: 404, message: "User not found" };
       if (user.otp !== otp) throw { status: 400, message: "Invalid OTP" };
       if (user.otpExpires < Date.now()) throw { status: 400, message: "OTP expired" };
@@ -302,7 +519,7 @@ const verifyOtp = (req, res) => {
     .then(() => {
       res.json({ message: "OTP verified" });
     })
-    .catch(error => {
+    .catch((error) => {
       console.error(error);
       if (error.status && error.message) {
         return res.status(error.status).json({ message: error.message });
@@ -354,14 +571,14 @@ const archiveUser = (req, res) => {
     },
     { new: true }
   )
-    .then(user => {
+    .then((user) => {
       if (!user) return res.status(404).json({ message: "User not found" });
       res.json({
         message:
           "Your account has been archived. It will be permanently deleted after 6 months.",
       });
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(err);
       res.status(500).json({ message: "Server error" });
     });
@@ -379,11 +596,11 @@ const restoreUser = (req, res) => {
     },
     { new: true }
   )
-    .then(user => {
+    .then((user) => {
       if (!user) return res.status(404).json({ message: "User not found" });
       res.json({ message: "Account restored successfully" });
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(err);
       res.status(500).json({ message: "Server error" });
     });
@@ -402,22 +619,19 @@ const toggleTwoFactor = (req, res) => {
     { twoFactorEnabled: enabled },
     { new: true }
   )
-    .then(user => {
+    .then((user) => {
       if (!user) return res.status(404).json({ message: "User not found" });
       res.json({
         message: `Two-Factor Authentication ${enabled ? "enabled" : "disabled"}`,
-        twoFactorEnabled: user.twoFactorEnabled
+        twoFactorEnabled: user.twoFactorEnabled,
       });
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(err);
       res.status(500).json({ message: "Server error" });
     });
 };
 
-/* =========================
-   GET USER BY ID
-========================= */
 const getUserById = async (req, res) => {
   try {
     const user = await UserModel.findById(req.params.id)
@@ -493,22 +707,18 @@ const clearNotifications = async (req, res) => {
   }
 };
 
-
 const uploadAvatar = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // ✅ STEP 1: get current user FIRST
     const existingUser = await UserModel.findById(req.params.id);
 
-    // ✅ STEP 2: delete old avatar from Cloudinary
     if (existingUser?.avatarPublicId) {
       await cloudinary.uploader.destroy(existingUser.avatarPublicId);
     }
 
-    // ✅ STEP 3: upload new image
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
         { folder: "evacuation_app/avatars" },
@@ -519,12 +729,11 @@ const uploadAvatar = async (req, res) => {
       ).end(req.file.buffer);
     });
 
-    // ✅ STEP 4: save BOTH url + public_id
     const user = await UserModel.findByIdAndUpdate(
       req.params.id,
       {
         avatar: result.secure_url,
-        avatarPublicId: result.public_id, // 🔥 IMPORTANT
+        avatarPublicId: result.public_id,
       },
       { new: true }
     );
@@ -536,6 +745,43 @@ const uploadAvatar = async (req, res) => {
   } catch (err) {
     console.error("AVATAR UPLOAD ERROR:", err);
     res.status(500).json({ message: "Avatar upload failed" });
+  }
+};
+
+const registerNotificationToken = async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const platform = String(req.body?.platform || "").trim();
+    const deviceId = String(req.body?.deviceId || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ message: "Notification token is required." });
+    }
+
+    const user = await UserModel.findByIdAndUpdate(
+      req.params.id,
+      { $pull: { notificationTokens: { token } } },
+      { new: true }
+    );
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    user.notificationTokens.push({
+      token,
+      platform,
+      deviceId,
+      updatedAt: new Date(),
+    });
+    await user.save();
+
+    return res.json({
+      ok: true,
+      message: "Notification token registered",
+      tokenCount: user.notificationTokens.length,
+    });
+  } catch (err) {
+    console.error("Register notification token error:", err);
+    return res.status(500).json({ message: "Failed to register notification token." });
   }
 };
 
@@ -557,4 +803,5 @@ module.exports = {
   getUserNotifications,
   markNotificationsRead,
   clearNotifications,
+  registerNotificationToken,
 };

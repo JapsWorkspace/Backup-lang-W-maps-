@@ -1,35 +1,44 @@
-// screens/LogIn.jsx
-import React, { useState, useContext } from "react";
+import React, { useContext, useRef, useState } from "react";
 import {
-  TextInput,
-  View,
-  Text,
   Image,
-  TouchableOpacity,
-  Platform,
   KeyboardAvoidingView,
+  Platform,
   SafeAreaView,
   ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 import api from "../lib/api";
 import styles, { COLORS } from "../Designs/LogIn";
 import { UserContext } from "./UserContext";
-import {
-  sanitizeUsername,
-} from "./utils/validation";
+import { ThemeContext } from "./contexts/ThemeContext";
+import { sanitizeUsername } from "./utils/validation";
 
 export default function LogIn({ navigation }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [staySignedIn, setStaySignedIn] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const scrollRef = useRef(null);
+  const inputPositions = useRef({});
 
   const { setUser } = useContext(UserContext);
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme?.mode === "dark";
 
-  /* ---------------- VALIDATION ---------------- */
+  const scrollToInput = (key) => {
+    const y = inputPositions.current[key] || 0;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 28), animated: true });
+    });
+  };
+
   const validate = () => {
     if (!sanitizeUsername(username)) {
       setError("Username is required.");
@@ -44,7 +53,6 @@ export default function LogIn({ navigation }) {
     return true;
   };
 
-  /* ---------------- LOGIN ---------------- */
   const handleLogin = async () => {
     setError("");
 
@@ -56,7 +64,7 @@ export default function LogIn({ navigation }) {
       const cleanUsername = sanitizeUsername(username);
       const res = await api.post("/user/login", {
         username: cleanUsername,
-        password,
+        password: String(password || "").trim(),
       });
       const data = res.data || {};
 
@@ -77,131 +85,128 @@ export default function LogIn({ navigation }) {
       setUser({
         ...data.user,
         id: data.user._id,
-      });
+      }, { persist: staySignedIn });
 
       setUsername("");
       setPassword("");
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed.");
+      setError(err.response?.data?.message || "Login failed. Please check your account.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  /* ---------------- SIGNUP FLOW ENTRY ---------------- */
-  const handleGoToSignup = () => {
-    // ✅ Sign up ALWAYS starts at DataPrivacy
-    navigation.navigate("DataPrivacy");
-  };
-
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* BACKGROUND STRIPES */}
+    <SafeAreaView style={[styles.safe, isDark && styles.safeDark]}>
       <View style={styles.stripeTop} />
       <View style={styles.stripeMid} />
       <View style={styles.stripeMid2} />
       <View style={styles.stripeBottom} />
 
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.keyboard}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+        <ScrollView
+          ref={scrollRef}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.scrollContent}
+        >
           <View style={styles.pageContainer}>
-            {/* LOGO */}
             <Image
               source={require("../stores/assets/sagipbayanlogowhite.png")}
               style={styles.logo}
               resizeMode="contain"
             />
 
-            {/* PANEL */}
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>LOG IN ACCOUNT</Text>
+            <View style={[styles.panel, isDark && styles.panelDark]}>
+              <Text style={[styles.panelTitle, isDark && styles.panelTitleDark]}>
+                Welcome back
+              </Text>
+              <Text style={[styles.panelSubtitle, isDark && styles.panelSubtitleDark]}>
+                Sign in to continue to Sagip Bayan.
+              </Text>
 
-              {/* Username */}
               <TextInput
-                style={styles.input}
+                style={[styles.input, isDark && styles.inputDark]}
                 placeholder="Username"
                 placeholderTextColor={COLORS.placeholder}
                 value={username}
                 autoCapitalize="none"
-                onChangeText={(t) =>
-                  setUsername(sanitizeUsername(t))
-                }
+                autoCorrect={false}
+                returnKeyType="next"
+                onFocus={() => scrollToInput("username")}
+                onLayout={(event) => {
+                  inputPositions.current.username = event.nativeEvent.layout.y;
+                }}
+                onChangeText={(text) => setUsername(sanitizeUsername(text))}
               />
 
-              {/* Password with show / hide */}
-              <View style={{ position: "relative" }}>
+              <View style={styles.passwordWrap}>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, styles.passwordInput, isDark && styles.inputDark]}
                   placeholder="Password"
                   placeholderTextColor={COLORS.placeholder}
                   secureTextEntry={!showPassword}
                   value={password}
+                  returnKeyType="done"
+                  onSubmitEditing={handleLogin}
+                  onFocus={() => scrollToInput("password")}
+                  onLayout={(event) => {
+                    inputPositions.current.password = event.nativeEvent.layout.y;
+                  }}
                   onChangeText={setPassword}
                 />
                 <TouchableOpacity
-                  style={{
-                    position: "absolute",
-                    right: 16,
-                    top: 14,
-                  }}
-                  onPress={() => setShowPassword((p) => !p)}
+                  style={styles.eyeButton}
+                  onPress={() => setShowPassword((value) => !value)}
                 >
                   <Ionicons
                     name={showPassword ? "eye-off" : "eye"}
                     size={22}
-                    color="#6b7280"
+                    color={isDark ? "#CBD5E1" : "#6B7280"}
                   />
                 </TouchableOpacity>
               </View>
 
-              {/* Inline error */}
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+              {!!error && <Text style={styles.error}>{error}</Text>}
 
-              {/* Forgot password */}
-              <TouchableOpacity
-                onPress={() => navigation.navigate("EmailVerifyer")}
-              >
-                <Text
-                  style={{
-                    color: "#166534",
-                    fontWeight: "600",
-                    textAlign: "right",
-                    marginBottom: 14,
-                  }}
+              <View style={styles.loginOptionsRow}>
+                <TouchableOpacity
+                  style={styles.staySignedInButton}
+                  activeOpacity={0.82}
+                  onPress={() => setStaySignedIn((value) => !value)}
                 >
-                  Forgot password?
-                </Text>
-              </TouchableOpacity>
+                  <Ionicons
+                    name={staySignedIn ? "checkbox" : "square-outline"}
+                    size={22}
+                    color="#166534"
+                  />
+                  <Text style={[styles.staySignedInText, isDark && styles.staySignedInTextDark]}>
+                    Stay signed in
+                  </Text>
+                </TouchableOpacity>
 
-              {/* Login button */}
+                <TouchableOpacity onPress={() => navigation.navigate("EmailVerifyer")}>
+                <Text style={styles.forgotText}>Forgot password?</Text>
+              </TouchableOpacity>
+              </View>
+
               <TouchableOpacity
-                style={styles.button}
+                style={[styles.button, isSubmitting && styles.buttonDisabled]}
                 onPress={handleLogin}
                 disabled={isSubmitting}
               >
                 <Text style={styles.buttonText}>
-                  {isSubmitting ? "LOGGING IN..." : "LOGIN"}
+                  {isSubmitting ? "Signing in..." : "Sign in"}
                 </Text>
               </TouchableOpacity>
 
-              {/* Sign up */}
-              <Text
-                style={{
-                  marginTop: 20,
-                  textAlign: "center",
-                  fontSize: 16,
-                }}
-              >
+              <Text style={[styles.registerText, isDark && styles.registerTextDark]}>
                 Don&apos;t have an account?{" "}
                 <Text
-                  style={{
-                    color: "#166534",
-                    fontWeight: "700",
-                  }}
-                  onPress={handleGoToSignup}
+                  style={styles.registerLink}
+                  onPress={() => navigation.navigate("DataPrivacy")}
                 >
                   Register
                 </Text>

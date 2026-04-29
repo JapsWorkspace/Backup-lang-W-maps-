@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +13,7 @@ import {
 } from "react-native";
 
 import api from "../lib/api";
+import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import {
   isValidEmail,
   normalizeEmail,
@@ -21,6 +23,7 @@ import {
 export default function EmailVerifyer({ navigation }) {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
   const handleVerifyEmail = async () => {
     const cleanEmail = normalizeEmail(email);
@@ -60,7 +63,11 @@ export default function EmailVerifyer({ navigation }) {
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.container}>
+        <ScrollView
+          ref={scrollRef}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.container}
+        >
           <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
@@ -79,6 +86,9 @@ export default function EmailVerifyer({ navigation }) {
               autoCapitalize="none"
               keyboardType="email-address"
               autoCorrect={false}
+              onFocus={() => scrollToInput("email")}
+              onLayout={registerInput("email")}
+              maxLength={120}
               style={styles.input}
               placeholderTextColor="#7b867f"
             />
@@ -93,7 +103,7 @@ export default function EmailVerifyer({ navigation }) {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

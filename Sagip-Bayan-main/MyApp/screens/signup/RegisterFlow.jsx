@@ -10,13 +10,20 @@ import {
 
 import { useRef, useState } from "react";
 import { useNavigation } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import api from "../../lib/api";
 import StepPersonal from "./StepPersonal";
+import StepAddress from "./StepAddress";
 import StepSecurity from "./StepSecurity";
 import StepMobile from "./StepMobile";
 import SignUpHeader from "./SignUpHeader";
 
 const { width } = Dimensions.get("window");
+
+function buildFullAddress({ barangay, street }) {
+  return [street, barangay, "Jaen, Nueva Ecija"].filter(Boolean).join(", ");
+}
 
 export default function RegisterFlow() {
   const listRef = useRef(null);
@@ -32,20 +39,21 @@ export default function RegisterFlow() {
     password: "",
     phone: "",
     email: "",
+    barangay: "",
+    street: "",
     address: "",
   });
 
   const [showModal, setShowModal] = useState(false);
   const [modalMessage, setModalMessage] = useState("");
 
-  // 🔥 structured backend errors
   const [serverError, setServerError] = useState({
     email: "",
     phone: "",
     username: "",
   });
 
-  const steps = ["personal", "security", "mobile"];
+  const steps = ["personal", "address", "security", "mobile"];
 
   const updateForm = (data) => {
     setForm((prev) => ({ ...prev, ...data }));
@@ -100,70 +108,53 @@ export default function RegisterFlow() {
     setStep(index);
   };
 
-  /* ================= REGISTER ================= */
   const handleSubmit = async (mobileData) => {
     try {
+      const rebuiltAddress = buildFullAddress({
+        barangay: form.barangay,
+        street: form.street,
+      });
+
       const payload = {
         fname: form.fname,
         lname: form.lname,
         username: form.username,
         password: form.password,
-        email: form.email,
+        email: mobileData.email,
         phone: mobileData.phone,
-        address: form.address,
+        barangay: form.barangay,
+        street: form.street,
+        streetAddress: form.street,
+        address: rebuiltAddress,
       };
 
       console.log("📦 FINAL CLEAN PAYLOAD:", payload);
 
-      const res = await fetch("http://192.168.1.8:8000/user/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const result = await res.json();
+      const res = await api.post("/user/register", payload);
+      const result = res?.data || {};
+      await AsyncStorage.multiSet([
+        ["hasSeenGetStarted", "true"],
+        ["getStartedSeen", "true"],
+        ["hasAcceptedPrivacy", "true"],
+        ["hasAcceptedDataPrivacy", "true"],
+        ["privacyAccepted", "true"],
+        ["hasAcceptedTerms", "true"],
+        ["termsAccepted", "true"],
+        ["hasAccount", "true"],
+        ["hasCreatedAccount", "true"],
+        ["onboardingComplete", "true"],
+      ]);
 
       console.log("📨 SERVER RESPONSE:", result);
 
-      /* ================= ERROR HANDLING ================= */
-      if (!res.ok) {
-        const message =
-          result?.message ||
-          result?.error ||
-          (typeof result === "string" ? result : "Registration failed");
-
-        console.log("❌ REGISTER ERROR:", message);
-
-        const lower = message.toLowerCase();
-
-        const errors = {
-          email: lower.includes("email") ? "Email already exists" : "",
-          phone: lower.includes("phone") ? "Phone number already exists" : "",
-          username: lower.includes("username")
-            ? "Username already exists"
-            : "",
-        };
-
-        setServerError(errors);
-
-        // prioritize message shown to user
-        const modalMsg =
-          errors.email ||
-          errors.phone ||
-          errors.username ||
-          message;
-
-        setModalMessage(modalMsg);
-        setShowModal(true);
-        return;
-      }
-
-      /* ================= SUCCESS ================= */
-      console.log("✅ REGISTER SUCCESS:", result);
-
       setServerError({ email: "", phone: "", username: "" });
 
-      setModalMessage("Registration successful! Please verify your email.");
+      setModalMessage(
+        result?.message ||
+          (result?.emailSent === false
+            ? "Registration successful, but verification email could not be sent yet."
+            : "Registration successful! Please verify your email.")
+      );
       setShowModal(true);
 
       setTimeout(() => {
@@ -171,9 +162,31 @@ export default function RegisterFlow() {
         navigation.navigate("LogIn");
       }, 1500);
     } catch (err) {
-      console.log("❌ REGISTER ERROR:", err.message);
+      const message =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Registration failed";
 
-      setModalMessage("Network error. Please try again.");
+      console.log("❌ REGISTER ERROR:", message);
+
+      const lower = String(message).toLowerCase();
+
+      const errors = {
+        email: lower.includes("email") ? "Email already exists" : "",
+        phone: lower.includes("phone") ? "Phone number already exists" : "",
+        username: lower.includes("username") ? "Username already exists" : "",
+      };
+
+      setServerError(errors);
+
+      const modalMsg =
+        errors.email ||
+        errors.phone ||
+        errors.username ||
+        message;
+
+      setModalMessage(modalMsg);
       setShowModal(true);
     }
   };
@@ -182,7 +195,6 @@ export default function RegisterFlow() {
     <View style={styles.container}>
       <SignUpHeader step={step} onBack={goBack} />
 
-      {/* MODAL */}
       <Modal visible={showModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
@@ -223,12 +235,37 @@ export default function RegisterFlow() {
           <View style={styles.page}>
             {item === "personal" && (
               <StepPersonal
+                fName={form.fname}
+                lName={form.lname}
+                username={form.username}
+                onFNameChange={(v) => updateForm({ fname: v })}
+                onLNameChange={(v) => updateForm({ lname: v })}
+                onUsernameChange={(v) => updateForm({ username: v })}
                 onNext={(data) => {
                   updateForm({
                     fname: data.fName,
                     lname: data.lName,
                     username: data.username,
-                    address: data.address,
+                  });
+                  goNext();
+                }}
+              />
+            )}
+
+            {item === "address" && (
+              <StepAddress
+                barangay={form.barangay}
+                street={form.street}
+                onBarangayChange={(v) => updateForm({ barangay: v })}
+                onStreetChange={(v) => updateForm({ street: v })}
+                onNext={(data) => {
+                  updateForm({
+                    barangay: data.barangay,
+                    street: data.street,
+                    address: buildFullAddress({
+                      barangay: data.barangay,
+                      street: data.street,
+                    }),
                   });
                   goNext();
                 }}
@@ -253,8 +290,6 @@ export default function RegisterFlow() {
                 onPhoneChange={(v) => updateForm({ phone: v })}
                 onEmailChange={(v) => updateForm({ email: v })}
                 onSubmit={handleSubmit}
-
-                // 🔥 backend field errors
                 emailError={serverError.email}
                 phoneError={serverError.phone}
               />
@@ -266,7 +301,6 @@ export default function RegisterFlow() {
   );
 }
 
-/* ================= STYLES ================= */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
   page: { width, flex: 1 },

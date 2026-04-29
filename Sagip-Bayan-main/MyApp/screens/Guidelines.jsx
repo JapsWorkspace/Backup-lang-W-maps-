@@ -1,5 +1,5 @@
 // screens/Guidelines.jsx
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import api from "../lib/api";
 import styles, { COLORS } from "../Designs/Guidelines";
+import { UserContext } from "./UserContext";
 import {
   isSafeHttpUrl,
   sanitizeSearchText,
@@ -24,6 +25,7 @@ import {
 } from "./utils/validation";
 
 export default function GuidelinesListScreen({ navigation }) {
+  const { user } = useContext(UserContext) || {};
   const [guidelines, setGuidelines] = useState([]);
   const [filteredGuidelines, setFilteredGuidelines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,56 +37,66 @@ export default function GuidelinesListScreen({ navigation }) {
 
   useEffect(() => {
     fetchGuidelines();
-  }, [selectedCategory]);
+  }, [selectedCategory, user?._id]);
 
   useEffect(() => {
     handleSearch(searchText);
   }, [searchText, guidelines]);
 
-  const fetchGuidelines = async () => {
-    try {
-      setLoading(true);
-      const params = {};
-      if (selectedCategory !== "all") params.category = selectedCategory;
+ const fetchGuidelines = async () => {
+  try {
+    setLoading(true);
+    const params = {};
+    if (selectedCategory !== "all") params.category = selectedCategory;
 
-      const response = await api.get("/api/guidelines", {
-        params,
-        validateStatus: (status) => status === 200 || status === 404,
-      });
+    const response = await api.get("/api/guidelines", {
+      params: {
+        ...params,
+        userId: user?._id,
+      },
+      validateStatus: (status) => status === 200 || status === 404,
+    });
 
-      if (response.status === 404) {
-        setGuidelines([]);
-        setFilteredGuidelines([]);
-        return;
-      }
-
-      const items = Array.isArray(response.data) ? response.data : [];
-      setGuidelines(items);
-      setFilteredGuidelines(items);
-    } catch (error) {
-      console.log("Error fetching guidelines:", {
-        message: error?.message,
-        status: error?.response?.status,
-        data: error?.response?.data,
-      });
-    } finally {
-      setLoading(false);
+    if (response.status === 404) {
+      setGuidelines([]);
+      setFilteredGuidelines([]);
+      return;
     }
-  };
 
+    const items = Array.isArray(response.data) ? response.data : [];
+    const visibleItems = items.filter((item) => {
+      const status = String(item?.status || "").toLowerCase();
+      return status !== "draft" && status !== "archived";
+    });
+
+    setGuidelines(visibleItems);
+    setFilteredGuidelines(visibleItems);
+  } catch (error) {
+    console.log("Error fetching guidelines:", {
+      message: error?.message,
+      status: error?.response?.status,
+      data: error?.response?.data,
+    });
+  } finally {
+    setLoading(false);
+  }
+};
   const handleSearch = (text) => {
     const cleanText = sanitizeSearchText(text);
     setSearchText(cleanText);
+
     if (!cleanText) {
       setFilteredGuidelines(guidelines);
       setSuggestions([]);
       return;
     }
+
     const filtered = guidelines.filter((item) =>
       safeDisplayText(item?.title, "")
         .toLowerCase()
         .includes(cleanText.toLowerCase())
     );
+
     setFilteredGuidelines(filtered);
     setSuggestions(
       filtered
@@ -98,15 +110,60 @@ export default function GuidelinesListScreen({ navigation }) {
     setSuggestions([]);
   };
 
+  const updateGuidelineInState = (nextItem) => {
+    setGuidelines((prev) =>
+      prev.map((item) => (item._id === nextItem._id ? { ...item, ...nextItem } : item))
+    );
+    setFilteredGuidelines((prev) =>
+      prev.map((item) => (item._id === nextItem._id ? { ...item, ...nextItem } : item))
+    );
+    setSelectedGuideline((current) =>
+      current?._id === nextItem._id ? { ...current, ...nextItem } : current
+    );
+  };
+
+  const openGuideline = async (item) => {
+    setSelectedGuideline(item);
+    if (!user?._id || !item?._id || item.viewedByCurrentUser) return;
+
+    try {
+      const response = await api.post(`/api/guidelines/${item._id}/view`, {
+        userId: user._id,
+      });
+      updateGuidelineInState(response.data);
+    } catch (error) {
+      console.log("Error recording guideline view:", error?.message);
+    }
+  };
+
+  const toggleGuidelineLike = async (item) => {
+    if (!user?._id || !item?._id) return;
+
+    try {
+      const response = await api.post(`/api/guidelines/${item._id}/like`, {
+        userId: user._id,
+      });
+      updateGuidelineInState(response.data);
+    } catch (error) {
+      console.log("Error toggling guideline like:", error?.message);
+    }
+  };
+
   const renderItem = ({ item }) => (
-    <TouchableOpacity style={styles.card} onPress={() => setSelectedGuideline(item)} activeOpacity={0.88}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={() => openGuideline(item)}
+      activeOpacity={0.88}
+    >
       <View style={localStyles.postHeader}>
         <View style={localStyles.publisherAvatar}>
           <Ionicons name="megaphone-outline" size={18} color={COLORS.green} />
         </View>
         <View style={localStyles.publisherCopy}>
           <Text style={localStyles.publisherName}>MDRRMO</Text>
-          <Text style={localStyles.publisherMeta}>Official disaster guidance post</Text>
+          <Text style={localStyles.publisherMeta}>
+            Official disaster guidance post
+          </Text>
         </View>
       </View>
 
@@ -114,6 +171,7 @@ export default function GuidelinesListScreen({ navigation }) {
         <Text style={styles.title} numberOfLines={2}>
           {safeDisplayText(item?.title, "Untitled guideline")}
         </Text>
+
         {!!item.description && (
           <Text style={styles.desc} numberOfLines={4}>
             {safeDisplayText(item?.description, "")}
@@ -126,14 +184,15 @@ export default function GuidelinesListScreen({ navigation }) {
             style={localStyles.postImage}
             maxHeight={380}
             minHeight={180}
-            onPress={() => setSelectedGuideline(item)}
+            onPress={() => openGuideline(item)}
           />
         )}
+
+        <EngagementRow item={item} />
 
         <View style={localStyles.postMetaRow}>
           <View style={styles.metaRow}>
             <MetaPill text={item.category || "general"} />
-            <MetaPill text={item.status || "active"} />
             <MetaPill text={item.priorityLevel || "normal"} tone="warning" />
           </View>
           <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
@@ -154,25 +213,38 @@ export default function GuidelinesListScreen({ navigation }) {
     <View style={styles.container}>
       <View style={styles.phone}>
         <View style={styles.headerRow}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+          >
             <Ionicons name="chevron-back" size={22} color={COLORS.green} />
           </TouchableOpacity>
+
           <View style={styles.headerCopy}>
             <Text style={styles.headerTitle}>Guidelines</Text>
-            <Text style={styles.headerSub}>Preparedness notes and official safety references.</Text>
+            <Text style={styles.headerSub}>
+              Preparedness notes and official safety references.
+            </Text>
           </View>
         </View>
 
         <View style={styles.heroCard}>
           <View style={styles.heroIconWrap}>
-            <Ionicons name="shield-checkmark-outline" size={22} color="#FFFFFF" />
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={22}
+              color="#FFFFFF"
+            />
           </View>
+
           <View style={styles.heroCopy}>
             <Text style={styles.heroTitle}>Emergency guidance</Text>
             <Text style={styles.heroText}>
-              Browse MDRRMO-issued instructions, safety notes, and incident-specific references.
+              Browse MDRRMO-issued instructions, safety notes, and
+              incident-specific references.
             </Text>
           </View>
+
           <View style={styles.heroCount}>
             <Text style={styles.heroCountValue}>{filteredGuidelines.length}</Text>
             <Text style={styles.heroCountLabel}>results</Text>
@@ -198,7 +270,11 @@ export default function GuidelinesListScreen({ navigation }) {
                 onPress={() => selectSuggestion(title)}
                 style={styles.suggestionItem}
               >
-                <Ionicons name="return-down-forward-outline" size={15} color="#647067" />
+                <Ionicons
+                  name="return-down-forward-outline"
+                  size={15}
+                  color="#647067"
+                />
                 <Text style={styles.suggestionText}>{title}</Text>
               </TouchableOpacity>
             ))}
@@ -207,7 +283,9 @@ export default function GuidelinesListScreen({ navigation }) {
 
         <View style={styles.filterBlock}>
           <Text style={styles.filterTitle}>Categories</Text>
-          <Text style={styles.filterSubtitle}>Quickly narrow the list by hazard type.</Text>
+          <Text style={styles.filterSubtitle}>
+            Quickly narrow the list by hazard type.
+          </Text>
         </View>
 
         <View style={styles.filterContainer}>
@@ -229,21 +307,31 @@ export default function GuidelinesListScreen({ navigation }) {
 
         <FlatList
           data={filteredGuidelines}
-          keyExtractor={(item, index) => String(item?._id || item?.id || index)}
+          keyExtractor={(item, index) =>
+            String(item?._id || item?.id || index)
+          }
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Ionicons name="document-text-outline" size={28} color="#94A3B8" />
+              <Ionicons
+                name="document-text-outline"
+                size={28}
+                color="#94A3B8"
+              />
               <Text style={styles.emptyTitle}>No guidelines found</Text>
-              <Text style={styles.emptyText}>Try a different search or category.</Text>
+              <Text style={styles.emptyText}>
+                Try a different search or category.
+              </Text>
             </View>
           }
         />
 
         <GuidelineModal
           item={selectedGuideline}
+          userId={user?._id}
+          onToggleLike={toggleGuidelineLike}
           onClose={() => setSelectedGuideline(null)}
         />
       </View>
@@ -254,31 +342,42 @@ export default function GuidelinesListScreen({ navigation }) {
 function MetaPill({ text, tone }) {
   return (
     <View style={[styles.metaPill, tone === "warning" && styles.metaPillWarning]}>
-      <Text style={[styles.metaText, tone === "warning" && styles.metaTextWarning]}>
+      <Text
+        style={[styles.metaText, tone === "warning" && styles.metaTextWarning]}
+      >
         {String(text).toUpperCase()}
       </Text>
     </View>
   );
 }
 
-function GuidelineModal({ item, onClose }) {
+function GuidelineModal({ item, userId, onToggleLike, onClose }) {
   const [selectedImage, setSelectedImage] = useState(null);
 
   if (!item) return null;
 
   return (
     <>
-      <Modal transparent animationType="fade" visible={!!item} onRequestClose={onClose}>
+      <Modal
+        transparent
+        animationType="fade"
+        visible={!!item}
+        onRequestClose={onClose}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalBox}>
             <View style={styles.modalHeader}>
               <View style={localStyles.publisherAvatar}>
                 <Ionicons name="megaphone-outline" size={18} color={COLORS.green} />
               </View>
+
               <View style={styles.modalTitleBlock}>
                 <Text style={localStyles.publisherName}>MDRRMO</Text>
-                <Text style={localStyles.publisherMeta}>Official disaster guidance</Text>
+                <Text style={localStyles.publisherMeta}>
+                  Official disaster guidance
+                </Text>
               </View>
+
               <TouchableOpacity style={styles.closeIcon} onPress={onClose}>
                 <Ionicons name="close" size={20} color="#475569" />
               </TouchableOpacity>
@@ -288,11 +387,39 @@ function GuidelineModal({ item, onClose }) {
               <Text style={styles.modalTitle}>
                 {safeDisplayText(item?.title, "Untitled guideline")}
               </Text>
+
               {!!item.description && (
                 <Text style={styles.modalDesc}>
                   {safeDisplayText(item?.description, "")}
                 </Text>
               )}
+
+              <View style={localStyles.modalEngagementRow}>
+                <EngagementRow item={item} />
+                <TouchableOpacity
+                  style={[
+                    localStyles.likeButton,
+                    item.likedByCurrentUser && localStyles.likeButtonActive,
+                    !userId && localStyles.likeButtonDisabled,
+                  ]}
+                  disabled={!userId}
+                  onPress={() => onToggleLike?.(item)}
+                >
+                  <Ionicons
+                    name={item.likedByCurrentUser ? "heart" : "heart-outline"}
+                    size={17}
+                    color={item.likedByCurrentUser ? "#FFFFFF" : COLORS.green}
+                  />
+                  <Text
+                    style={[
+                      localStyles.likeButtonText,
+                      item.likedByCurrentUser && localStyles.likeButtonTextActive,
+                    ]}
+                  >
+                    {item.likedByCurrentUser ? "Liked" : "Like"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
 
               {getPrimaryImage(item) && (
                 <ResponsiveAttachmentImage
@@ -307,18 +434,21 @@ function GuidelineModal({ item, onClose }) {
               {getNonImageAttachments(item).length > 0 && (
                 <View style={styles.attachments}>
                   <Text style={styles.attachHeader}>Files</Text>
+
                   {getNonImageAttachments(item).map((file, index) => (
                     <TouchableOpacity
                       key={index}
                       style={styles.fileRow}
                       onPress={() => {
-                        if (!isSafeHttpUrl(file?.fileUrl)) {
-                          return;
-                        }
+                        if (!isSafeHttpUrl(file?.fileUrl)) return;
                         Linking.openURL(file.fileUrl);
                       }}
                     >
-                      <Ionicons name="document-attach-outline" size={18} color={COLORS.link} />
+                      <Ionicons
+                        name="document-attach-outline"
+                        size={18}
+                        color={COLORS.link}
+                      />
                       <Text style={styles.link}>
                         {safeDisplayText(file?.fileName, "Attachment")}
                       </Text>
@@ -344,6 +474,24 @@ function GuidelineModal({ item, onClose }) {
         />
       </Modal>
     </>
+  );
+}
+
+function EngagementRow({ item }) {
+  const views = Number(item?.viewCount ?? item?.views ?? 0);
+  const likes = Number(item?.likeCount ?? 0);
+
+  return (
+    <View style={localStyles.engagementRow}>
+      <View style={localStyles.engagementPill}>
+        <Ionicons name="eye-outline" size={14} color="#647067" />
+        <Text style={localStyles.engagementText}>{views} seen</Text>
+      </View>
+      <View style={localStyles.engagementPill}>
+        <Ionicons name="heart-outline" size={14} color="#647067" />
+        <Text style={localStyles.engagementText}>{likes} likes</Text>
+      </View>
+    </View>
   );
 }
 
@@ -380,11 +528,7 @@ function ResponsiveAttachmentImage({
 
   const imageNode = (
     <View style={[localStyles.imageFrame, { minHeight, maxHeight }]}>
-      <Image
-        source={{ uri }}
-        style={[style, { aspectRatio }]}
-        resizeMode="contain"
-      />
+      <Image source={{ uri }} style={[style, { aspectRatio }]} resizeMode="contain" />
     </View>
   );
 
@@ -435,16 +579,13 @@ function ZoomableImageViewer({ image, title, onClose }) {
   const clampedScale = Math.max(1, Math.min(scale, 3));
   const baseWidth = Math.max(280, width - 32);
   const scaledWidth = baseWidth * clampedScale;
-  const scaledHeight = (scaledWidth / aspectRatio);
+  const scaledHeight = scaledWidth / aspectRatio;
   const viewerMinHeight = Math.max(height - 210, 320);
 
   return (
     <View style={styles.imageViewerScreen}>
       <View style={styles.imageViewerHeader}>
-        <TouchableOpacity
-          style={styles.imageViewerBack}
-          onPress={onClose}
-        >
+        <TouchableOpacity style={styles.imageViewerBack} onPress={onClose}>
           <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
           <Text style={styles.imageViewerBackText}>Back</Text>
         </TouchableOpacity>
@@ -452,19 +593,27 @@ function ZoomableImageViewer({ image, title, onClose }) {
         <View style={styles.imageViewerControls}>
           <TouchableOpacity
             style={styles.imageViewerControlBtn}
-            onPress={() => setScale((current) => Math.max(1, Number((current - 0.25).toFixed(2))))}
+            onPress={() =>
+              setScale((current) => Math.max(1, Number((current - 0.25).toFixed(2))))
+            }
           >
             <Ionicons name="remove" size={18} color="#FFFFFF" />
           </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.imageViewerControlBtn}
             onPress={() => setScale(1)}
           >
-            <Text style={styles.imageViewerControlText}>{Math.round(clampedScale * 100)}%</Text>
+            <Text style={styles.imageViewerControlText}>
+              {Math.round(clampedScale * 100)}%
+            </Text>
           </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.imageViewerControlBtn}
-            onPress={() => setScale((current) => Math.min(3, Number((current + 0.25).toFixed(2))))}
+            onPress={() =>
+              setScale((current) => Math.min(3, Number((current + 0.25).toFixed(2))))
+            }
           >
             <Ionicons name="add" size={18} color="#FFFFFF" />
           </TouchableOpacity>
@@ -581,5 +730,60 @@ const localStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
+  },
+  engagementRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  engagementPill: {
+    minHeight: 28,
+    paddingHorizontal: 9,
+    borderRadius: 999,
+    backgroundColor: "#F8FAF7",
+    borderWidth: 1,
+    borderColor: "#E2E8E2",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  engagementText: {
+    color: "#647067",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  modalEngagementRow: {
+    marginTop: 12,
+    marginBottom: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  likeButton: {
+    minHeight: 36,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: COLORS.green,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  likeButtonActive: {
+    backgroundColor: COLORS.green,
+  },
+  likeButtonDisabled: {
+    opacity: 0.5,
+  },
+  likeButtonText: {
+    color: COLORS.green,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  likeButtonTextActive: {
+    color: "#FFFFFF",
   },
 });

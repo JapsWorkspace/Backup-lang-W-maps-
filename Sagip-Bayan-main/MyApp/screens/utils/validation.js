@@ -1,5 +1,6 @@
 const INVISIBLE_WHITESPACE_REGEX = /[\u200B-\u200D\uFEFF]/g;
 const MULTI_WHITESPACE_REGEX = /\s+/g;
+const SUSPICIOUS_TEXT_REGEX = /[<>{}[\]`$\\]/g;
 
 export const NAME_MAX_LENGTH = 50;
 export const USERNAME_MAX_LENGTH = 24;
@@ -7,6 +8,7 @@ export const ADDRESS_MAX_LENGTH = 160;
 export const SEARCH_MAX_LENGTH = 80;
 export const INCIDENT_LOCATION_MAX_LENGTH = 120;
 export const INCIDENT_DESCRIPTION_MAX_LENGTH = 500;
+export const DONATION_DESCRIPTION_MAX_LENGTH = 300;
 export const CONNECTION_CODE_MAX_LENGTH = 12;
 
 function asString(value) {
@@ -21,7 +23,9 @@ export function normalizeWhitespace(value) {
 }
 
 export function sanitizeTextInput(value, { maxLength, collapse = true } = {}) {
-  const base = asString(value).replace(INVISIBLE_WHITESPACE_REGEX, "");
+  const base = asString(value)
+    .replace(INVISIBLE_WHITESPACE_REGEX, "")
+    .replace(SUSPICIOUS_TEXT_REGEX, "");
   const normalized = collapse ? base.replace(MULTI_WHITESPACE_REGEX, " ") : base;
   const trimmed = normalized.trim();
 
@@ -33,9 +37,11 @@ export function sanitizeTextInput(value, { maxLength, collapse = true } = {}) {
 }
 
 export function sanitizeName(value) {
-  return sanitizeTextInput(value, {
-    maxLength: NAME_MAX_LENGTH,
-  }).replace(/[^A-Za-z.\-'\s]/g, "");
+  return asString(value)
+    .replace(INVISIBLE_WHITESPACE_REGEX, "")
+    .replace(/[^A-Za-z\s]/g, "")
+    .replace(MULTI_WHITESPACE_REGEX, " ")
+    .slice(0, NAME_MAX_LENGTH);
 }
 
 export function sanitizeUsername(value) {
@@ -54,6 +60,34 @@ export function sanitizeEmailInput(value) {
 
 export function sanitizePhoneLocal(value) {
   return asString(value).replace(/\D/g, "").slice(0, 10);
+}
+
+export function sanitizeAmount(value) {
+  const cleaned = asString(value)
+    .replace(/[^0-9.]/g, "")
+    .replace(/(\..*)\./g, "$1");
+  const [whole, cents = ""] = cleaned.split(".");
+  return cents ? `${whole.slice(0, 8)}.${cents.slice(0, 2)}` : whole.slice(0, 8);
+}
+
+export function sanitizeQuantity(value) {
+  return asString(value).replace(/\D/g, "").slice(0, 6);
+}
+
+export function sanitizeAlphaNumericText(value, maxLength = ADDRESS_MAX_LENGTH) {
+  return sanitizeTextInput(value, { maxLength }).replace(/[^A-Za-z0-9\s-]/g, "");
+}
+
+export function sanitizeReferenceText(value, maxLength = 80) {
+  return asString(value)
+    .replace(INVISIBLE_WHITESPACE_REGEX, "")
+    .replace(/\s+/g, "")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .slice(0, maxLength);
+}
+
+export function sanitizeIncidentText(value, maxLength = INCIDENT_DESCRIPTION_MAX_LENGTH) {
+  return sanitizeTextInput(value, { maxLength }).replace(/[^A-Za-z0-9\s,.-]/g, "");
 }
 
 export function normalizeEmail(value) {
@@ -134,6 +168,9 @@ export function getPasswordError(value, { minLength = 8, maxLength = 64 } = {}) 
 }
 
 export function toNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : null;
 }
@@ -143,12 +180,13 @@ export function isValidCoordinate(lat, lng) {
   const parsedLng = toNumber(lng);
 
   return (
-    parsedLat != null &&
-    parsedLng != null &&
+    parsedLat !== null &&
+    parsedLng !== null &&
     parsedLat >= -90 &&
     parsedLat <= 90 &&
     parsedLng >= -180 &&
-    parsedLng <= 180
+    parsedLng <= 180 &&
+    !(parsedLat === 0 && parsedLng === 0)
   );
 }
 
@@ -178,15 +216,11 @@ export function normalizeCoordinate(value) {
 }
 
 export function sanitizeIncidentLocation(value) {
-  return sanitizeTextInput(value, {
-    maxLength: INCIDENT_LOCATION_MAX_LENGTH,
-  });
+  return sanitizeIncidentText(value, INCIDENT_LOCATION_MAX_LENGTH);
 }
 
 export function sanitizeIncidentDescription(value) {
-  return sanitizeTextInput(value, {
-    maxLength: INCIDENT_DESCRIPTION_MAX_LENGTH,
-  });
+  return sanitizeIncidentText(value, INCIDENT_DESCRIPTION_MAX_LENGTH);
 }
 
 export function safeDisplayText(value, fallback = "Unknown") {

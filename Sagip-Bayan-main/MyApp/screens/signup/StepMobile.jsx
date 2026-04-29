@@ -11,6 +11,7 @@ import {
 import { useMemo, useState, useCallback } from "react";
 
 import styles from "../../Designs/StepMobile";
+import useFormAutoScroll from "../hooks/useFormAutoScroll";
 import {
   getPhoneError,
   isValidGmail,
@@ -31,6 +32,7 @@ export default function StepMobile({
   isSubmitting = false,
 }) {
   const [submitError, setSubmitError] = useState("");
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
   const phoneErrorLocal = useMemo(() => getPhoneError(phone), [phone]);
 
@@ -106,6 +108,7 @@ export default function StepMobile({
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
+        ref={scrollRef}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           flexGrow: 1,
@@ -146,6 +149,8 @@ export default function StepMobile({
                 placeholder="9171234567"
                 keyboardType="phone-pad"
                 value={phone}
+                onFocus={() => scrollToInput("phone")}
+                onLayout={registerInput("phone")}
                 onChangeText={handlePhoneChange}
                 maxLength={10}
               />
@@ -171,7 +176,10 @@ export default function StepMobile({
                 autoCapitalize="none"
                 autoCorrect={false}
                 value={email}
+                onFocus={() => scrollToInput("email")}
+                onLayout={registerInput("email")}
                 onChangeText={handleEmailChange}
+                maxLength={120}
               />
             </View>
 

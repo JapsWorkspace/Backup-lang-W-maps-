@@ -8,6 +8,7 @@ import {
   Dimensions,
   StyleSheet,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import DataPrivacy from "./DataPrivacy";
 import TermsCondition from "./TermsCondition";
 
@@ -18,10 +19,20 @@ export default function PrivacySwiper({ navigation }) {
   const [index, setIndex] = useState(0);
   const [accepted, setAccepted] = useState(false);
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (index === 0) {
       ref.current?.scrollToIndex({ index: 1, animated: true });
     } else if (accepted) {
+      await AsyncStorage.multiSet([
+        ["hasSeenGetStarted", "true"],
+        ["getStartedSeen", "true"],
+        ["hasAcceptedPrivacy", "true"],
+        ["hasAcceptedDataPrivacy", "true"],
+        ["privacyAccepted", "true"],
+        ["hasAcceptedTerms", "true"],
+        ["termsAccepted", "true"],
+        ["onboardingComplete", "true"],
+      ]);
       navigation.replace("RegisterFlow");
     }
   };

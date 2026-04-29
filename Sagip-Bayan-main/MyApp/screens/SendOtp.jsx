@@ -1,7 +1,16 @@
-// screens/SendOtp.jsx
 import { useState } from "react";
-import { TextInput, View, Text, Button } from "react-native";
+import {
+  Button,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
 import api from "../lib/api";
+import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import {
   isValidEmail,
   normalizeEmail,
@@ -13,9 +22,10 @@ export default function SendOtp({ navigation }) {
   const [emailError, setEmailError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
   const handleEmail = (text) => {
-    const rawEmail = sanitizeEmailInput(text);
+    const rawEmail = sanitizeEmailInput(text).slice(0, 120);
     const cleanEmail = normalizeEmail(rawEmail);
     setEmail(rawEmail);
     setMessage("");
@@ -53,38 +63,49 @@ export default function SendOtp({ navigation }) {
   };
 
   return (
-    <View style={{ padding: 20 }}>
-      <Text>Enter Email</Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        ref={scrollRef}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ flexGrow: 1, padding: 20, justifyContent: "center" }}
+      >
+        <Text>Enter Email</Text>
 
-      <TextInput
-        style={{
-          height: 40,
-          borderWidth: 1,
-          borderColor: emailError ? "red" : "#ccc",
-          marginBottom: 5,
-          padding: 8,
-        }}
-        placeholder="Email"
-        value={email}
-        onChangeText={handleEmail}
-        autoCapitalize="none"
-      />
+        <TextInput
+          style={{
+            height: 44,
+            borderWidth: 1,
+            borderColor: emailError ? "red" : "#ccc",
+            marginBottom: 5,
+            padding: 8,
+            borderRadius: 10,
+          }}
+          placeholder="Email"
+          value={email}
+          onChangeText={handleEmail}
+          onFocus={() => scrollToInput("email")}
+          onLayout={registerInput("email")}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          autoCorrect={false}
+          maxLength={120}
+        />
 
-      {emailError ? (
-        <Text style={{ color: "red", marginBottom: 10 }}>
-          {emailError}
-        </Text>
-      ) : null}
+        {emailError ? (
+          <Text style={{ color: "red", marginBottom: 10 }}>{emailError}</Text>
+        ) : null}
 
-      <Button
-        title={loading ? "Sending..." : "Send OTP"}
-        onPress={handleEnter}
-        disabled={loading || !!emailError || !email}
-      />
+        <Button
+          title={loading ? "Sending..." : "Send OTP"}
+          onPress={handleEnter}
+          disabled={loading || !!emailError || !email}
+        />
 
-      {message ? (
-        <Text style={{ marginTop: 10 }}>{message}</Text>
-      ) : null}
-    </View>
+        {message ? <Text style={{ marginTop: 10 }}>{message}</Text> : null}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }

@@ -57,10 +57,16 @@ export const UserProvider = ({ children }) => {
     loadUser();
   }, []);
 
-  const updateUser = async (data) => {
+  const updateUser = async (data, options = {}) => {
+    const persist = options.persist !== false;
+
     if (data) {
       setUser(data);
-      await AsyncStorage.setItem("user", JSON.stringify(data));
+      if (persist) {
+        await AsyncStorage.setItem("user", JSON.stringify(data));
+      } else {
+        await AsyncStorage.removeItem("user");
+      }
     } else {
       setUser(null);
       await AsyncStorage.removeItem("user");

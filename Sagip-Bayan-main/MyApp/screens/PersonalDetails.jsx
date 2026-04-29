@@ -1,5 +1,5 @@
 // screens/PersonalDetails.jsx
-import React, { useContext, useState } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,32 +8,145 @@ import {
   Platform,
   KeyboardAvoidingView,
   ScrollView,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Picker } from "@react-native-picker/picker";
+
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
 import styles, { COLORS } from "../Designs/PersonalDetails";
+import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import {
   getPhoneError,
   getUsernameError,
   safeDisplayText,
+  sanitizeIncidentText,
   sanitizePhoneLocal,
   sanitizeUsername,
 } from "./utils/validation";
 
+const DISTRICT_OPTIONS = [
+  "District 1",
+  "District 2",
+  "District 3",
+  "District 4",
+];
+
+const BARANGAY_BY_DISTRICT = {
+  "District 1": [
+    "Bagong Sikat",
+    "Balbalino",
+    "Banganan",
+    "Langla",
+    "Mabini",
+    "Maligaya",
+    "Santo Tomas South",
+  ],
+  "District 2": [
+    "Imbunia",
+    "Lambakin",
+    "Marawa",
+    "Naglabrahan",
+    "San Josef",
+    "San Roque",
+    "Santo Tomas North",
+  ],
+  "District 3": [
+    "Don Mariano Marcos",
+    "Hilera",
+    "Pinanggaan",
+    "San Andres",
+    "San Nicolas",
+    "Ulanin-Pitak",
+  ],
+  "District 4": [
+    "Calabasa",
+    "Kasanglayan",
+    "Pamacpacan",
+    "Putlod",
+    "Sapang",
+  ],
+};
+
+function sanitizeStreetDetails(value) {
+  return sanitizeIncidentText(value, 160).trimStart();
+}
+
+function getAddressError({ district, barangay, street }) {
+  if (!district) return "Please select a district.";
+  if (!barangay) return "Please select a barangay.";
+  if (!street.trim()) return "Please enter your street or address details.";
+  if (street.trim().length < 3) return "Street or address details are too short.";
+  return "";
+}
+
+function buildFullAddress({ district, barangay, street }) {
+  return [street, barangay, district, "Jaen, Nueva Ecija"]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function getUserId(user) {
+  return user?._id || user?.id || user?.userId || "";
+}
+
 export default function PersonalDetails({ navigation }) {
   const { user, setUser } = useContext(UserContext);
+
   const [username, setUsername] = useState(user?.username || "");
-  const [phone, setPhone] = useState(user?.phone || "");
+  const [phone, setPhone] = useState(
+    String(user?.phone || user?.phoneNumber || "").replace(/^0+/, "")
+  );
+
+  const [district, setDistrict] = useState(user?.district || "");
+  const [barangay, setBarangay] = useState(user?.barangay || "");
+  const [street, setStreet] = useState(
+    user?.street ||
+      user?.streetAddress ||
+      user?.addressLine ||
+      user?.houseAddress ||
+      ""
+  );
+
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
-  if (!user) return <Text>No user logged in</Text>;
+  const userId = getUserId(user);
 
-  const saveUsername = () => {
+  const barangayOptions = useMemo(() => {
+    return BARANGAY_BY_DISTRICT[district] || [];
+  }, [district]);
+
+  if (!user) {
+    return <Text>No user logged in</Text>;
+  }
+
+  const onChangeDistrict = (value) => {
+    setDistrict(value);
+
+    if (!value) {
+      setBarangay("");
+    } else if (!BARANGAY_BY_DISTRICT[value]?.includes(barangay)) {
+      setBarangay("");
+    }
+
+    if (error) setError("");
+  };
+
+  const savePersonalDetails = async () => {
     setError("");
+
+    if (!userId) {
+      setError("Missing user ID. Please log in again.");
+      Alert.alert("Update failed", "Missing user ID. Please log in again.");
+      return;
+    }
+
     const cleanUsername = sanitizeUsername(username);
     const usernameError = getUsernameError(cleanUsername);
+
     if (usernameError) {
       setError(usernameError);
       return;
@@ -41,34 +154,90 @@ export default function PersonalDetails({ navigation }) {
 
     const cleanPhone = sanitizePhoneLocal(phone);
     const phoneError = getPhoneError(cleanPhone);
+
     if (phoneError) {
       setError(phoneError);
       return;
     }
 
+    const cleanDistrict = String(district || "").trim();
+    const cleanBarangay = String(barangay || "").trim();
+    const cleanStreet = sanitizeStreetDetails(street);
+
+    const addressError = getAddressError({
+      district: cleanDistrict,
+      barangay: cleanBarangay,
+      street: cleanStreet,
+    });
+
+    if (addressError) {
+      setError(addressError);
+      return;
+    }
+
     if (isSaving) return;
+
     setIsSaving(true);
 
-    api
-      .put(`/user/update/${user.id}`, {
-        username: cleanUsername,
-        phoneNumber: cleanPhone,
-      })
-      .then(() => {
-        setUser({
-          ...user,
-          username: cleanUsername,
-          phone: cleanPhone,
-          phoneNumber: cleanPhone,
-        });
-      })
-      .catch((updateError) => {
-        console.error(updateError);
-        setError("Failed to update username or phone number.");
-      })
-      .finally(() => {
-        setIsSaving(false);
+    const fullAddress = buildFullAddress({
+      district: cleanDistrict,
+      barangay: cleanBarangay,
+      street: cleanStreet,
+    });
+
+    const payload = {
+      username: cleanUsername,
+      phoneNumber: cleanPhone,
+      phone: cleanPhone,
+      district: cleanDistrict,
+      barangay: cleanBarangay,
+      street: cleanStreet,
+      streetAddress: cleanStreet,
+      address: fullAddress,
+    };
+
+    try {
+      const response = await api.put(`/user/update/${userId}`, payload);
+      const updatedUser = response?.data || {};
+
+      const nextUser = {
+        ...user,
+        ...updatedUser,
+        _id: updatedUser?._id || user?._id || userId,
+        id: updatedUser?.id || user?.id || userId,
+        username: updatedUser?.username || cleanUsername,
+        phone: updatedUser?.phone || cleanPhone,
+        phoneNumber: updatedUser?.phoneNumber || cleanPhone,
+        district: updatedUser?.district || cleanDistrict,
+        barangay: updatedUser?.barangay || cleanBarangay,
+        street: updatedUser?.street || cleanStreet,
+        streetAddress: updatedUser?.streetAddress || cleanStreet,
+        address: updatedUser?.address || fullAddress,
+      };
+
+      setUser(nextUser);
+
+      Alert.alert("Details updated", "Your personal details have been saved.");
+      navigation.goBack();
+    } catch (updateError) {
+      console.log("Personal details update failed:", {
+        url: `/user/update/${userId}`,
+        payload,
+        message: updateError?.message,
+        status: updateError?.response?.status,
+        data: updateError?.response?.data,
       });
+
+      const message =
+        updateError?.response?.data?.message ||
+        updateError?.response?.data?.error ||
+        "Failed to update personal details.";
+
+      setError(message);
+      Alert.alert("Update failed", message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -78,18 +247,25 @@ export default function PersonalDetails({ navigation }) {
       keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
     >
       <ScrollView
+        ref={scrollRef}
         style={styles.phone}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerRow}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+          >
             <Ionicons name="chevron-back" size={22} color={COLORS.green} />
           </TouchableOpacity>
+
           <View style={styles.headerCopy}>
             <Text style={styles.headerTitle}>Personal Details</Text>
-            <Text style={styles.subText}>Keep contact details accurate for alerts and recovery.</Text>
+            <Text style={styles.subText}>
+              Keep contact and address details accurate for alerts and recovery.
+            </Text>
           </View>
         </View>
 
@@ -97,11 +273,15 @@ export default function PersonalDetails({ navigation }) {
           <View style={styles.summaryIcon}>
             <Ionicons name="id-card-outline" size={23} color={COLORS.green} />
           </View>
+
           <View style={styles.summaryCopy}>
             <Text style={styles.summaryTitle}>
-              {user.fname} {user.lname}
+              {safeDisplayText(user.fname, "User")}{" "}
+              {safeDisplayText(user.lname, "")}
             </Text>
-            <Text style={styles.summaryMeta}>{user.email}</Text>
+            <Text style={styles.summaryMeta}>
+              {safeDisplayText(user.email, "No email")}
+            </Text>
           </View>
         </View>
 
@@ -114,8 +294,11 @@ export default function PersonalDetails({ navigation }) {
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Editable details</Text>
+
           <Text style={styles.label}>Username</Text>
-          <Text style={styles.helper}>Used as your resident identifier inside Sagip Bayan.</Text>
+          <Text style={styles.helper}>
+            Used as your resident identifier inside Sagip Bayan.
+          </Text>
           <TextInput
             style={styles.input}
             value={username}
@@ -127,10 +310,15 @@ export default function PersonalDetails({ navigation }) {
             placeholderTextColor={COLORS.placeholder}
             autoCapitalize="none"
             autoCorrect={false}
+            onFocus={() => scrollToInput("username")}
+            onLayout={registerInput("username")}
+            maxLength={24}
           />
 
           <Text style={styles.label}>Phone Number</Text>
-          <Text style={styles.helper}>Used for urgent messages and account recovery.</Text>
+          <Text style={styles.helper}>
+            Used for urgent messages and account recovery.
+          </Text>
           <TextInput
             style={styles.input}
             value={phone}
@@ -138,18 +326,122 @@ export default function PersonalDetails({ navigation }) {
               setPhone(sanitizePhoneLocal(text));
               if (error) setError("");
             }}
-            editable
             keyboardType="phone-pad"
             placeholder="Phone Number"
             placeholderTextColor={COLORS.placeholder}
             maxLength={10}
+            onFocus={() => scrollToInput("phone")}
+            onLayout={registerInput("phone")}
           />
+
+          <Text style={styles.label}>District</Text>
+          <Text style={styles.helper}>
+            Select the district that your address belongs to.
+          </Text>
+          <View style={styles.input}>
+            <Picker
+              selectedValue={district}
+              onValueChange={onChangeDistrict}
+              style={{ color: district ? COLORS.text : COLORS.placeholder }}
+            >
+              <Picker.Item label="Select district" value="" />
+              {DISTRICT_OPTIONS.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
+
+          <Text style={styles.label}>Barangay</Text>
+          <Text style={styles.helper}>
+            Select your barangay so alerts can be matched to your area.
+          </Text>
+          <View style={styles.input}>
+            <Picker
+              selectedValue={barangay}
+              enabled={Boolean(district)}
+              onValueChange={(value) => {
+                setBarangay(value);
+                if (error) setError("");
+              }}
+              style={{
+                color: barangay ? COLORS.text : COLORS.placeholder,
+                opacity: district ? 1 : 0.6,
+              }}
+            >
+              <Picker.Item
+                label={district ? "Select barangay" : "Select district first"}
+                value=""
+              />
+              {barangayOptions.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
+
+          <Text style={styles.label}>Street / Address Details</Text>
+          <Text style={styles.helper}>
+            Enter house number, street, purok, or other address details.
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={street}
+            onChangeText={(text) => {
+              setStreet(sanitizeStreetDetails(text));
+              if (error) setError("");
+            }}
+            placeholder="House no., street, purok, landmark"
+            placeholderTextColor={COLORS.placeholder}
+            autoCapitalize="words"
+            maxLength={160}
+            onFocus={() => scrollToInput("street")}
+            onLayout={registerInput("street")}
+          />
+
+          <View
+            style={{
+              marginTop: 2,
+              marginBottom: 12,
+              padding: 12,
+              borderRadius: 14,
+              backgroundColor: "#F7FAF8",
+              borderWidth: 1,
+              borderColor: "#E4ECE7",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: "800",
+                color: COLORS.muted || "#64748B",
+                marginBottom: 4,
+                textTransform: "uppercase",
+              }}
+            >
+              Full Address Preview
+            </Text>
+            <Text
+              style={{
+                fontSize: 13,
+                lineHeight: 18,
+                color: COLORS.text || "#10251b",
+                fontWeight: "700",
+              }}
+            >
+              {district || barangay || street
+                ? buildFullAddress({
+                    district: String(district || "").trim(),
+                    barangay: String(barangay || "").trim(),
+                    street: sanitizeStreetDetails(street),
+                  })
+                : "No address set yet"}
+            </Text>
+          </View>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <TouchableOpacity
-            style={styles.button}
-            onPress={saveUsername}
+            style={[styles.button, isSaving && { opacity: 0.65 }]}
+            onPress={savePersonalDetails}
             disabled={isSaving}
           >
             <Text style={styles.buttonText}>
@@ -169,7 +461,9 @@ function Field({ label, value, editable }) {
       <Text style={styles.readOnlyValue} numberOfLines={1}>
         {safeDisplayText(value, "Not set")}
       </Text>
-      {!editable && <Ionicons name="lock-closed-outline" size={15} color="#94A3B8" />}
+      {!editable && (
+        <Ionicons name="lock-closed-outline" size={15} color="#94A3B8" />
+      )}
     </View>
   );
 }

@@ -54,6 +54,8 @@ const createPlace = async (req, res) => {
       longitude,
       capacityIndividual,
       capacityFamily,
+      currentOccupants,
+      currentFamilies,
       bedCapacity,
       floorArea,
       femaleCR,
@@ -118,6 +120,8 @@ const createPlace = async (req, res) => {
       longitude: lngNum,
       capacityIndividual: toNumber(capacityIndividual, 0),
       capacityFamily: toNumber(capacityFamily, 0),
+      currentOccupants: toNumber(currentOccupants, 0),
+      currentFamilies: toNumber(currentFamilies, 0),
       bedCapacity: toNumber(bedCapacity, 0),
       floorArea: toNumber(floorArea, 0),
       femaleCR: toBoolean(femaleCR),
@@ -185,8 +189,28 @@ const getPlaces = async (req, res) => {
       }
     }
 
-    const places = await Place.find(filter).sort({ createdAt: -1 });
-    res.json(places);
+    const status = sanitizeText(req.query.status);
+    const barangay = sanitizeText(req.query.barangay);
+    if (status === "full") filter.capacityStatus = "full";
+    if (status === "has-space") filter.capacityStatus = { $ne: "full" };
+    if (barangay) filter.barangayName = new RegExp(`^${barangay.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+
+    const places = await Place.find(filter).sort({ barangayName: 1, name: 1 });
+    const enriched = places.map((place) => {
+      const item = place.toObject({ virtuals: true });
+      item.totalCapacity = item.capacityIndividual || 0;
+      item.availableSlots = Math.max(0, (item.capacityIndividual || 0) - (item.currentOccupants || 0));
+      item.occupancyPercentage = item.capacityIndividual
+        ? Math.min(100, Math.round(((item.currentOccupants || 0) / item.capacityIndividual) * 100))
+        : 0;
+      return item;
+    });
+
+    if (req.query.sort === "most-available") {
+      enriched.sort((a, b) => b.availableSlots - a.availableSlots);
+    }
+
+    res.json(enriched);
   } catch (err) {
     console.error("Get Places Error:", err);
     res.status(500).json({ message: "Server error" });
@@ -248,6 +272,8 @@ const updatePlace = async (req, res) => {
       longitude,
       capacityIndividual,
       capacityFamily,
+      currentOccupants,
+      currentFamilies,
       bedCapacity,
       floorArea,
       femaleCR,
@@ -287,6 +313,8 @@ const updatePlace = async (req, res) => {
 
     if (capacityIndividual !== undefined) existing.capacityIndividual = toNumber(capacityIndividual, 0);
     if (capacityFamily !== undefined) existing.capacityFamily = toNumber(capacityFamily, 0);
+    if (currentOccupants !== undefined) existing.currentOccupants = toNumber(currentOccupants, 0);
+    if (currentFamilies !== undefined) existing.currentFamilies = toNumber(currentFamilies, 0);
     if (bedCapacity !== undefined) existing.bedCapacity = toNumber(bedCapacity, 0);
     if (floorArea !== undefined) existing.floorArea = toNumber(floorArea, 0);
     if (foodPackCapacity !== undefined) existing.foodPackCapacity = toNumber(foodPackCapacity, 0);

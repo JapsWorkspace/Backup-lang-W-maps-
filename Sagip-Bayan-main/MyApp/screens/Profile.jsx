@@ -11,9 +11,11 @@ import {
   ScrollView,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import { Ionicons } from "@expo/vector-icons";
+
 import { UserContext } from "./UserContext";
-import api from "../lib/api";
+import api, { getApiBaseUrl } from "../lib/api";
 import { safeDisplayText } from "./utils/validation";
 
 const DEFAULT_AVATAR =
@@ -34,14 +36,16 @@ export default function Profile({ navigation }) {
     if (!user?._id || uploading) return;
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
     if (status !== "granted") {
       Alert.alert("Permission required", "Please allow photo access.");
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
+      mediaTypes: ["images"],
+      quality: 0.7,
+      allowsEditing: true,
     });
 
     if (result.canceled || !Array.isArray(result.assets) || !result.assets[0]?.uri) {
@@ -60,21 +64,55 @@ export default function Profile({ navigation }) {
 
     try {
       setUploading(true);
-      const ext = picked.uri.split(".").pop()?.toLowerCase() || "jpg";
-      const formData = new FormData();
-      formData.append("avatar", {
-        uri: picked.uri,
-        name: `avatar.${ext}`,
-        type: mimeType,
+
+      const API_BASE_URL = await getApiBaseUrl();
+
+      const uploadResult = await FileSystem.uploadAsync(
+        `${API_BASE_URL}/user/avatar/${user._id}`,
+        picked.uri,
+        {
+          httpMethod: "PUT",
+          uploadType: 1,
+          fieldName: "avatar",
+          mimeType,
+          parameters: {},
+        }
+      );
+
+      let responseData = {};
+
+      try {
+        responseData = uploadResult.body ? JSON.parse(uploadResult.body) : {};
+      } catch (_) {
+        responseData = { message: uploadResult.body };
+      }
+
+      console.log("Avatar upload response:", {
+        status: uploadResult.status,
+        body: responseData,
       });
 
-      const res = await api.put(`/user/avatar/${user._id}`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        throw new Error(responseData?.message || "Avatar upload failed.");
+      }
 
-      setUser(res?.data?.user || user);
+      const updatedUser = responseData?.user || {
+        ...user,
+        avatar: responseData?.avatar || picked.uri,
+      };
+
+      setUser(updatedUser);
+      setAvatarUri(updatedUser.avatar || picked.uri);
+
+      Alert.alert("Profile updated", "Your profile picture has been updated.");
     } catch (err) {
-      Alert.alert("Upload failed", "Please try again.");
+      console.log("Avatar upload failed:", {
+        message: err?.message,
+        data: err?.response?.data,
+        status: err?.response?.status,
+      });
+
+      Alert.alert("Upload failed", err?.message || "Please try again.");
       setAvatarUri(user.avatar || null);
     } finally {
       setUploading(false);
@@ -96,10 +134,12 @@ export default function Profile({ navigation }) {
         <TouchableOpacity style={styles.headerIcon} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color="#123524" />
         </TouchableOpacity>
+
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Account</Text>
           <Text style={styles.headerSubtitle}>Profile and safety identity</Text>
         </View>
+
         <View style={styles.headerIconGhost}>
           <Ionicons name="shield-checkmark-outline" size={21} color="#166534" />
         </View>
@@ -116,11 +156,13 @@ export default function Profile({ navigation }) {
             ]}
           >
             <Image source={{ uri: avatarUri || DEFAULT_AVATAR }} style={styles.avatar} />
+
             {uploading && (
               <View style={styles.overlay}>
                 <ActivityIndicator color="#fff" />
               </View>
             )}
+
             <View style={styles.cameraBadge}>
               <Ionicons name="camera-outline" size={15} color="#ffffff" />
             </View>
@@ -130,7 +172,11 @@ export default function Profile({ navigation }) {
             <Text style={styles.name}>
               {safeDisplayText(user.fname, "User")} {safeDisplayText(user.lname, "")}
             </Text>
-            <Text style={styles.username}>@{safeDisplayText(user.username, "resident")}</Text>
+
+            <Text style={styles.username}>
+              @{safeDisplayText(user.username, "resident")}
+            </Text>
+
             <View
               style={[
                 styles.statusPill,
@@ -162,6 +208,7 @@ export default function Profile({ navigation }) {
               {safeDisplayText(user.phone, "Not set")}
             </Text>
           </View>
+
           <View style={styles.infoTile}>
             <Text style={styles.infoLabel}>Email</Text>
             <Text style={styles.infoValue} numberOfLines={1}>
@@ -176,6 +223,7 @@ export default function Profile({ navigation }) {
           <Ionicons name="checkmark-circle-outline" size={16} color="#166534" />
           <Text style={styles.summaryPillText}>Account active</Text>
         </View>
+
         <View style={styles.summaryPillSoft}>
           <Ionicons name="shield-half-outline" size={16} color="#6B7C3F" />
           <Text style={styles.summaryPillSoftText}>Safety-ready profile</Text>
@@ -184,12 +232,14 @@ export default function Profile({ navigation }) {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Manage account</Text>
+
         <ActionRow
           icon="person-outline"
           title="Personal Details"
           subtitle="Name, username, phone and email"
           onPress={() => navigation.navigate("PersonalDetails")}
         />
+
         <ActionRow
           icon="lock-closed-outline"
           title="Password & Security"
@@ -203,6 +253,7 @@ export default function Profile({ navigation }) {
           <Text style={styles.dangerTitle}>Delete account</Text>
           <Text style={styles.dangerSub}>Permanently remove your profile data.</Text>
         </View>
+
         <TouchableOpacity
           style={styles.deleteBtn}
           onPress={() =>
@@ -225,10 +276,12 @@ function ActionRow({ icon, title, subtitle, onPress }) {
       <View style={styles.actionIcon}>
         <Ionicons name={icon} size={20} color="#14532D" />
       </View>
+
       <View style={styles.actionCopy}>
         <Text style={styles.actionTitle}>{title}</Text>
         <Text style={styles.actionSubtitle}>{subtitle}</Text>
       </View>
+
       <Ionicons name="chevron-forward" size={19} color="#94A3B8" />
     </TouchableOpacity>
   );

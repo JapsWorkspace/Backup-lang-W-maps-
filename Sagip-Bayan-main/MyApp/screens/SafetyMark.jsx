@@ -11,6 +11,7 @@ import {
   Animated,
   Dimensions,
   Image,
+  KeyboardAvoidingView,
   Modal,
   PanResponder,
   Platform,
@@ -49,11 +50,37 @@ const JAEN_INITIAL_REGION = {
   longitudeDelta: 0.12,
 };
 
+const DEBUG_PROFILE_COORDINATE = {
+  latitude: 15.3383,
+  longitude: 120.9141,
+};
+
 const OUTSIDE_JAEN_MASK = [
   { latitude: 16.2, longitude: 119.8 },
   { latitude: 16.2, longitude: 122.0 },
   { latitude: 14.4, longitude: 122.0 },
   { latitude: 14.4, longitude: 119.8 },
+];
+
+const SAFETY_STATUS_OPTIONS = [
+  {
+    value: "SAFE",
+    label: "Safe",
+    description: "I am safe",
+    icon: "shield-checkmark-outline",
+    endpointType: "safe",
+    activeColor: "#2F855A",
+    softColor: "#E8F5EC",
+  },
+  {
+    value: "NOT_SAFE",
+    label: "Not Safe",
+    description: "Need help",
+    icon: "warning-outline",
+    endpointType: "not-safe",
+    activeColor: "#B91C1C",
+    softColor: "#FDECEC",
+  },
 ];
 
 const safeArray = (value) => (Array.isArray(value) ? value : []);
@@ -182,6 +209,42 @@ function resolveAvatarPath(avatar) {
   return `${BASE_URL}${avatar}`;
 }
 
+function ProfileSafetyMarker({ member }) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const markerColor = member?.safetyColor || getSafetyColor(member?.safetyStatus);
+  const avatarUri = !avatarFailed && member?.avatar ? resolveAvatarPath(member.avatar) : null;
+
+  return (
+    <View
+      style={[
+        styles.profilePin,
+        {
+          borderColor: markerColor,
+        },
+      ]}
+      collapsable={false}
+    >
+      {avatarUri ? (
+        <Image
+          source={{ uri: avatarUri }}
+          style={styles.profilePinAvatar}
+          onError={() => setAvatarFailed(true)}
+        />
+      ) : (
+        <View style={[styles.profilePinIconFallback, { backgroundColor: `${markerColor}18` }]}>
+          <Ionicons name="person" size={24} color={markerColor} />
+        </View>
+      )}
+      <View
+        style={[
+          styles.profilePinStatus,
+          { backgroundColor: markerColor },
+        ]}
+      />
+    </View>
+  );
+}
+
 function normalizeConnection(connection, currentUserId) {
   if (!connection?._id) return null;
 
@@ -244,6 +307,101 @@ function MetricCard({ label, value, tone = "neutral" }) {
   );
 }
 
+function SafetyStatusToggle({ value, disabled, onChange }) {
+  return (
+    <View style={styles.statusToggleCard}>
+      <View style={styles.statusToggleHeader}>
+        <View style={styles.statusToggleTitleWrap}>
+          <Text style={styles.statusToggleEyebrow}>Updated Safety Status</Text>
+          <Text style={styles.statusToggleTitle}>Mark your current condition</Text>
+        </View>
+
+        <View
+          style={[
+            styles.statusToggleCurrentBadge,
+            { backgroundColor: `${getSafetyColor(value)}16` },
+          ]}
+        >
+          <View
+            style={[
+              styles.statusToggleCurrentDot,
+              { backgroundColor: getSafetyColor(value) },
+            ]}
+          />
+          <Text
+            style={[
+              styles.statusToggleCurrentText,
+              { color: getSafetyColor(value) },
+            ]}
+          >
+            {getSafetyLabel(value)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.statusToggleRow}>
+        {SAFETY_STATUS_OPTIONS.map((option) => {
+          const active = value === option.value;
+
+          return (
+            <Pressable
+              key={option.value}
+              disabled={disabled}
+              onPress={() => onChange(option)}
+              style={({ pressed }) => [
+                styles.statusToggleButton,
+                {
+                  backgroundColor: active ? option.activeColor : option.softColor,
+                  borderColor: active ? option.activeColor : `${option.activeColor}22`,
+                  opacity: disabled ? 0.68 : pressed ? 0.86 : 1,
+                  transform: [{ scale: pressed && !disabled ? 0.985 : 1 }],
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusToggleIconWrap,
+                  {
+                    backgroundColor: active
+                      ? "rgba(255,255,255,0.18)"
+                      : "rgba(255,255,255,0.76)",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={option.icon}
+                  size={18}
+                  color={active ? "#FFFFFF" : option.activeColor}
+                />
+              </View>
+
+              <View style={styles.statusToggleButtonCopy}>
+                <Text
+                  style={[
+                    styles.statusToggleButtonText,
+                    { color: active ? "#FFFFFF" : option.activeColor },
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                <Text
+                  style={[
+                    styles.statusToggleButtonSubtext,
+                    { color: active ? "rgba(255,255,255,0.78)" : "#617066" },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {option.description}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function SafetyMark() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -259,6 +417,7 @@ export default function SafetyMark() {
   const [localSafetyStatus, setLocalSafetyStatus] = useState(
     user?.safetyStatus || "SAFE"
   );
+  const [safetyDebugMode, setSafetyDebugMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [joinRequestModalVisible, setJoinRequestModalVisible] = useState(false);
   const [joinRequestModalMessage, setJoinRequestModalMessage] = useState(
@@ -489,6 +648,19 @@ export default function SafetyMark() {
 
   const jaenBounds = useMemo(() => getBoundsFromData(jaenGeoJSON), []);
 
+  useEffect(() => {
+    if (!safetyDebugMode) return;
+
+    mapRef.current?.animateToRegion(
+      {
+        ...DEBUG_PROFILE_COORDINATE,
+        latitudeDelta: 0.025,
+        longitudeDelta: 0.025,
+      },
+      320
+    );
+  }, [safetyDebugMode]);
+
   const visibleMembersOnMap = useMemo(() => {
     const insideMembers = allPeople
       .map((member) => {
@@ -501,26 +673,52 @@ export default function SafetyMark() {
         };
       })
       .filter(Boolean);
-    if (insideMembers.length) return insideMembers;
 
-    const userCoordinate = normalizeCoordinate(user?.location);
-    if (
-      userCoordinate &&
-      isPointInsideJaen(userCoordinate.latitude, userCoordinate.longitude)
-    ) {
+    if (safetyDebugMode) {
+      const membersWithoutUser = insideMembers.filter((member) => member.id !== user?._id);
       return [
         {
-          id: user._id || "me",
+          id: user?._id || "me",
           username: user?.username || "You",
+          avatar: user?.avatar ? resolveAvatarPath(user.avatar) : null,
           safetyColor: getSafetyColor(localSafetyStatus),
           safetyLabel: getSafetyLabel(localSafetyStatus),
-          coordinate: userCoordinate,
+          coordinate: DEBUG_PROFILE_COORDINATE,
+          isCurrentUser: true,
+          insideJaen: true,
         },
+        ...membersWithoutUser,
       ];
     }
 
+    const userCoordinate = normalizeCoordinate(user?.location);
+    const shouldShowCurrentUser =
+      user?.location?.share !== false &&
+      userCoordinate &&
+      isPointInsideJaen(userCoordinate.latitude, userCoordinate.longitude);
+
+    if (shouldShowCurrentUser) {
+      const currentUserMarker = {
+        id: user?._id || "me",
+        username: user?.username || "You",
+        avatar: user?.avatar ? resolveAvatarPath(user.avatar) : null,
+        safetyColor: getSafetyColor(localSafetyStatus),
+        safetyLabel: getSafetyLabel(localSafetyStatus),
+        coordinate: userCoordinate,
+        isCurrentUser: true,
+        insideJaen: true,
+      };
+
+      return [
+        currentUserMarker,
+        ...insideMembers.filter((member) => member.id !== currentUserMarker.id),
+      ];
+    }
+
+    if (insideMembers.length) return insideMembers;
+
     return [];
-  }, [allPeople, localSafetyStatus, user]);
+  }, [allPeople, localSafetyStatus, safetyDebugMode, user]);
 
   const outsideCount = useMemo(
     () => allPeople.filter((member) => member.location && !member.insideJaen).length,
@@ -662,15 +860,13 @@ export default function SafetyMark() {
         return;
       }
 
-      Alert.alert(
-        "Join Failed",
-        message
-      );
+      Alert.alert("Join Failed", message);
     }
   };
 
   const handleSafetyUpdate = async (nextStatus, endpoint, errorMessage) => {
     if (!user?._id) return;
+    if (nextStatus === localSafetyStatus) return;
 
     const previousStatus = localSafetyStatus;
     setLocalSafetyStatus(nextStatus);
@@ -685,6 +881,16 @@ export default function SafetyMark() {
       setLocalSafetyStatus(previousStatus);
       Alert.alert("Error", errorMessage);
     }
+  };
+
+  const handleToggleSafetyStatus = async (option) => {
+    if (!option?.value || !user?._id) return;
+
+    await handleSafetyUpdate(
+      option.value,
+      `/connection/${option.endpointType}/${user._id}`,
+      `Failed to mark ${option.label.toUpperCase()}.`
+    );
   };
 
   const handleLeaveConnection = async (connectionId) => {
@@ -793,17 +999,32 @@ export default function SafetyMark() {
       >
         {jaenFocusMask}
         {jaenBoundary}
-        {visibleMembersOnMap.map((member) => (
+        {visibleMembersOnMap.map((member) =>
           member.coordinate ? (
-            <Marker
-              key={member.id}
-              coordinate={member.coordinate}
-              title={member.username}
-              description={member.safetyLabel}
-              pinColor={member.safetyColor}
-            />
+            member.isCurrentUser ? (
+              <Marker
+                key={member.id}
+                coordinate={member.coordinate}
+                title={member.username}
+                description={member.safetyLabel}
+                anchor={{ x: 0.5, y: 1 }}
+                zIndex={1000}
+                tracksViewChanges
+              >
+                <ProfileSafetyMarker member={member} />
+              </Marker>
+            ) : (
+              <Marker
+                key={member.id}
+                coordinate={member.coordinate}
+                title={member.username}
+                description={member.safetyLabel}
+                pinColor={member.safetyColor}
+                tracksViewChanges={false}
+              />
+            )
           ) : null
-        ))}
+        )}
       </MapView>
 
       <View style={styles.mapLegend}>
@@ -811,15 +1032,26 @@ export default function SafetyMark() {
           <Text style={styles.legendBadgeText}>Jaen Safety Map</Text>
         </View>
         <Text style={styles.legendNote}>
-          {outsideCount > 0 ? `${outsideCount} outside Jaen` : "Inside-Jaen markers only"}
+          {safetyDebugMode
+            ? "Debug Mode ON: profile pin forced inside Jaen"
+            : outsideCount > 0
+              ? `${outsideCount} outside Jaen`
+              : "Inside-Jaen markers only"}
         </Text>
       </View>
 
-      <View style={styles.panelLayer} pointerEvents="box-none">
+      <KeyboardAvoidingView
+        style={styles.panelLayer}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        pointerEvents="box-none"
+      >
         <Animated.View style={[styles.floatingTabWrap, { top: Animated.add(panelTop, -76) }]}>
           <View style={styles.floatingTabRow}>
             <Pressable
-              style={[styles.floatingTabButton, activeTab === "status" && styles.floatingTabButtonActive]}
+              style={[
+                styles.floatingTabButton,
+                activeTab === "status" && styles.floatingTabButtonActive,
+              ]}
               onPress={() => setActiveTab("status")}
             >
               <Ionicons
@@ -838,7 +1070,10 @@ export default function SafetyMark() {
             </Pressable>
 
             <Pressable
-              style={[styles.floatingTabButton, activeTab === "manage" && styles.floatingTabButtonActive]}
+              style={[
+                styles.floatingTabButton,
+                activeTab === "manage" && styles.floatingTabButtonActive,
+              ]}
               onPress={() => setActiveTab("manage")}
             >
               <Ionicons
@@ -857,7 +1092,10 @@ export default function SafetyMark() {
             </Pressable>
 
             <Pressable
-              style={[styles.floatingTabButton, activeTab === "join" && styles.floatingTabButtonActive]}
+              style={[
+                styles.floatingTabButton,
+                activeTab === "join" && styles.floatingTabButtonActive,
+              ]}
               onPress={() => setActiveTab("join")}
             >
               <Ionicons
@@ -939,6 +1177,36 @@ export default function SafetyMark() {
               </View>
             </View>
 
+            <Pressable
+              style={[
+                styles.debugCard,
+                safetyDebugMode && styles.debugCardActive,
+              ]}
+              onPress={() => setSafetyDebugMode((value) => !value)}
+            >
+              <Ionicons
+                name={safetyDebugMode ? "bug" : "bug-outline"}
+                size={18}
+                color={safetyDebugMode ? "#FFFFFF" : "#365314"}
+              />
+              <Text
+                style={[
+                  styles.debugCardText,
+                  safetyDebugMode && styles.debugCardTextActive,
+                ]}
+              >
+                {safetyDebugMode
+                  ? "Debug Mode ON: profile pin is visible for testing"
+                  : "Debug Mode OFF: real location visibility is followed"}
+              </Text>
+            </Pressable>
+
+            <SafetyStatusToggle
+              value={localSafetyStatus}
+              disabled={loading}
+              onChange={handleToggleSafetyStatus}
+            />
+
             <View style={styles.metricsRow}>
               <MetricCard label="Members" value={memberCount} />
               <MetricCard label="Safe" value={safeCount} tone="safe" />
@@ -1011,7 +1279,10 @@ export default function SafetyMark() {
                               />
                               <View style={styles.personStatus}>
                                 <Text
-                                  style={[styles.personStatusText, { color: member.safetyColor }]}
+                                  style={[
+                                    styles.personStatusText,
+                                    { color: member.safetyColor },
+                                  ]}
                                 >
                                   {member.safetyLabel}
                                 </Text>
@@ -1034,41 +1305,6 @@ export default function SafetyMark() {
                           </View>
                         </View>
                       ))}
-                    </View>
-
-                    <View style={styles.safetyPanel}>
-                      <View style={styles.safetyPanelHeader}>
-                        <Text style={styles.safetyPanelTitle}>Update your status</Text>
-                        <Text style={styles.safetyPanelSubtitle}>
-                          Let your connection know how you are doing right now.
-                        </Text>
-                      </View>
-                      <View style={styles.safetyActions}>
-                        <Pressable
-                          style={styles.safeButton}
-                          onPress={() =>
-                            handleSafetyUpdate(
-                              "SAFE",
-                              `/connection/safe/${user?._id}`,
-                              "Failed to mark SAFE."
-                            )
-                          }
-                        >
-                          <Text style={styles.safeButtonText}>SAFE</Text>
-                        </Pressable>
-                        <Pressable
-                          style={styles.notSafeButton}
-                          onPress={() =>
-                            handleSafetyUpdate(
-                              "NOT_SAFE",
-                              `/connection/not-safe/${user?._id}`,
-                              "Failed to mark NOT SAFE."
-                            )
-                          }
-                        >
-                          <Text style={styles.notSafeButtonText}>UNSAFE</Text>
-                        </Pressable>
-                      </View>
                     </View>
                   </>
                 )}
@@ -1221,7 +1457,7 @@ export default function SafetyMark() {
             )}
           </ScrollView>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
 
       <Modal
         visible={joinRequestModalVisible}
@@ -1293,6 +1529,46 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.18)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
+  },
+
+  profilePin: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 3,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#12281A",
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+
+  profilePinAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+
+  profilePinIconFallback: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  profilePinStatus: {
+    position: "absolute",
+    right: -1,
+    bottom: -1,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
 
   panelLayer: {
@@ -1470,6 +1746,138 @@ const styles = StyleSheet.create({
   profileStatusText: {
     fontSize: 12,
     fontWeight: "800",
+  },
+
+  debugCard: {
+    minHeight: 46,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: "#EEF8EA",
+    borderWidth: 1,
+    borderColor: "#CFE3C6",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  debugCardActive: {
+    backgroundColor: "#365314",
+    borderColor: "#365314",
+  },
+
+  debugCardText: {
+    flex: 1,
+    color: "#365314",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
+
+  debugCardTextActive: {
+    color: "#FFFFFF",
+  },
+
+  statusToggleCard: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DDE9D8",
+    shadowColor: "#12281A",
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+
+  statusToggleHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+  },
+
+  statusToggleTitleWrap: {
+    flex: 1,
+  },
+
+  statusToggleEyebrow: {
+    color: "#365314",
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  statusToggleTitle: {
+    marginTop: 4,
+    color: "#1C2B1F",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+
+  statusToggleCurrentBadge: {
+    minHeight: 30,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+
+  statusToggleCurrentDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+  },
+
+  statusToggleCurrentText: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  statusToggleRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  statusToggleButton: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  statusToggleIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  statusToggleButtonCopy: {
+    flex: 1,
+  },
+
+  statusToggleButtonText: {
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  statusToggleButtonSubtext: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "700",
   },
 
   section: {
