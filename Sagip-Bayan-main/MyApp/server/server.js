@@ -31,6 +31,7 @@ const timeInOutRoutes = require("./routes/timeInOutRoutes");
 const editRoutes = require("./routes/editRoutes");
 const barangayStockRoutes = require("./routes/barangayStockRoutes");
 const donationRoutes = require("./routes/donationRoutes");
+const safetyMarkingRoutes = require("./routes/safetyMarkingRoutes");
 
 // Donation & inventory routes
 const inventoryRoutes = require("./routes/inventoryRoutes");
@@ -258,6 +259,7 @@ app.use("/api/relief-requests", reliefRequestRoutes);
 app.use("/api/relief-releases", reliefReleaseRoutes);
 app.use("/api/barangay-stock", barangayStockRoutes);
 app.use("/api/donations", donationRoutes);
+app.use("/api/safety-marking", safetyMarkingRoutes);
 
 // --------------------
 // Hazard proxy

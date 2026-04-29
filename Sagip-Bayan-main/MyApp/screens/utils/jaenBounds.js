@@ -19,4 +19,3 @@ export function routeIsInsideJaen(route) {
     ([lng, lat]) => isPointInsideJaen(lat, lng)
   );
 }
-``
