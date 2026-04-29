@@ -33,7 +33,11 @@ export default function GuidelinesScreen() {
   const fetchGuidelines = async () => {
     try {
       let url = BASE_URL;
-      if (showArchived) url += "?status=archived";
+      if (showArchived) {
+        url += "?includeAll=true&status=archived";
+      } else {
+        url += "?includeAll=true";
+      }
       const response = await axios.get(url);
       const sorted = response.data.sort((a, b) => {
         const order = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -337,6 +341,8 @@ export default function GuidelinesScreen() {
           <p>Category: {item.category}</p>
           <p>Status: {item.status}</p>
           <p>Priority: {item.priorityLevel}</p>
+          <p>Seen: {item.viewCount ?? item.views ?? 0}</p>
+          <p>Likes: {item.likeCount ?? 0}</p>
           <p>{item.description}</p>
 
           {item.attachments?.length > 0 && (

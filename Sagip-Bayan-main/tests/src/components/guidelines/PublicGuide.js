@@ -58,16 +58,24 @@ export default function PublicGuide() {
 
   // ---------- View count handler ----------
   const handleViewGuideline = async (item) => {
+    const userId = localStorage.getItem("userId") || localStorage.getItem("_id");
     try {
-      await axios.patch(`${BASE_URL}view/${item._id}`);
-      setGuidelines((prev) =>
-        prev.map((g) =>
-          g._id === item._id ? { ...g, views: (g.views || 0) + 1 } : g
-        )
-      );
-      setSelectedGuideline(item); // open modal
+      if (userId) {
+        const res = await axios.post(`${BASE_URL}${item._id}/view`, { userId });
+        setGuidelines((prev) =>
+          prev.map((g) => (g._id === item._id ? res.data : g))
+        );
+        setFilteredGuidelines((prev) =>
+          prev.map((g) => (g._id === item._id ? res.data : g))
+        );
+        setSelectedGuideline(res.data);
+        return;
+      }
+
+      setSelectedGuideline(item);
     } catch (err) {
       console.error("Error incrementing view:", err.message);
+      setSelectedGuideline(item);
     }
   };
 
@@ -85,7 +93,8 @@ export default function PublicGuide() {
       }}
     >
       <h3>{item.title}</h3>
-      <p>Views: {item.views || 0}</p>
+      <p>Seen: {item.viewCount ?? item.views ?? 0}</p>
+      <p>Likes: {item.likeCount ?? 0}</p>
       <p>Category: {item.category}</p>
       <p>Status: {item.status}</p>
       <p>Priority: {item.priorityLevel}</p>
@@ -207,7 +216,8 @@ export default function PublicGuide() {
         >
           <h2>{selectedGuideline.title}</h2>
 
-          <p><strong>Views:</strong> {selectedGuideline.views || 0}</p>
+          <p><strong>Seen:</strong> {selectedGuideline.viewCount ?? selectedGuideline.views ?? 0}</p>
+          <p><strong>Likes:</strong> {selectedGuideline.likeCount ?? 0}</p>
           <p><strong>Category:</strong> {selectedGuideline.category}</p>
           <p><strong>Priority:</strong> {selectedGuideline.priorityLevel}</p>
 

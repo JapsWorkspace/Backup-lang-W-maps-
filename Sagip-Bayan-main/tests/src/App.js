@@ -30,6 +30,7 @@ import AdminAccounts from './components/group/AdminAccounts';
 import Inventory from './components/Donations/Inventory';
 import PublicGuide from './components/guidelines/PublicGuide';
 import InventoryAdd from './components/Donations/InventoryAdd';
+import DonationManagement from './components/Donations/DonationManagement';
 
 function App() {
   return (
@@ -65,6 +66,7 @@ function App() {
             <Route path="/drrmo/audit-trail" element={<AuditTrail />} />
             <Route path="/drrmo/guidelines" element={<HomeGuidelines />} />
             <Route path="/drrmo/inventory" element={<Inventory />} />
+            <Route path="/drrmo/donations" element={<DonationManagement />} />
 
             {/* Admin */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
@@ -75,6 +77,7 @@ function App() {
             <Route path="/admin/archived-accounts" element={<ArchivedAccounts />} />
             <Route path="/admin/inventory" element={<Inventory />} /> 
             <Route path="/admin/inventory/add" element={<InventoryAdd />} />
+            <Route path="/admin/donations" element={<DonationManagement />} />
             <Route path="/admin/time-in-time-out" element={<TimeInOut />} />
             <Route path="/admin/logs" element={<AdminLogs />} />
             <Route path="/admin/accounts" element={<AdminAccounts />} />
