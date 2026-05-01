@@ -304,6 +304,7 @@ export default function GuidelinesScreen() {
                     setEditTitle(item.title);
                     setEditDescription(item.description);
                     setEditCategory(item.category);
+                    setEditStatus(item.status);
                     setEditPriority(item.priorityLevel);
                     setEditFiles([]);
                   }}

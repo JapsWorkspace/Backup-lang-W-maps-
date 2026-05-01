@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../contexts/ThemeContext";
 
 const JAEN_WEATHER_COORDINATES = {
   latitude: 15.3383,
@@ -144,29 +145,33 @@ function normalizeWeatherPayload(payload) {
   };
 }
 
-function WeatherStat({ label, value }) {
+function WeatherStat({ label, value, theme }) {
   return (
     <View style={styles.statBlock}>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statLabel, { color: theme.mode === "dark" ? "#D7E8DC" : "#B7D9C0" }]}>
+        {label}
+      </Text>
       <Text style={styles.statValue}>{value}</Text>
     </View>
   );
 }
 
-function ForecastCard({ item }) {
+function ForecastCard({ item, theme, themed }) {
   return (
-    <View style={styles.forecastCard}>
-      <Text style={styles.forecastDay}>{item.day}</Text>
-      <Ionicons name={item.icon} size={20} color="#1D6B41" />
-      <Text style={styles.forecastTemp}>
+    <View style={[styles.forecastCard, themed.card]}>
+      <Text style={[styles.forecastDay, themed.text]}>{item.day}</Text>
+      <Ionicons name={item.icon} size={20} color={theme.primary} />
+      <Text style={[styles.forecastTemp, themed.text]}>
         {item.high} / {item.low} C
       </Text>
-      <Text style={styles.forecastRain}>Rain {formatPercent(item.rainChance)}</Text>
+      <Text style={[styles.forecastRain, themed.subtext]}>Rain {formatPercent(item.rainChance)}</Text>
     </View>
   );
 }
 
 export default function JaenWeatherForecast({ variant = "panel", onWeatherChange }) {
+  const { theme } = useTheme();
+  const themed = useMemo(() => createWeatherThemeStyles(theme), [theme]);
   const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -235,18 +240,18 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
   });
 
   return (
-    <View style={[styles.section, isMapOverlay && styles.mapSection]}>
+    <View style={[styles.section, isMapOverlay && styles.mapSection, themed.section]}>
       <View style={styles.headerRow}>
         <View style={styles.headerCopy}>
-          {!isMapOverlay && <Text style={styles.eyebrow}>Weather Overview</Text>}
-          <Text style={[styles.title, isMapOverlay && styles.mapTitle]}>
+          {!isMapOverlay && <Text style={[styles.eyebrow, themed.primaryText]}>Weather Overview</Text>}
+          <Text style={[styles.title, isMapOverlay && styles.mapTitle, themed.text]}>
             {isMapOverlay ? "Jaen Weather" : "Local Weather Forecast"}
           </Text>
-          <Text style={styles.subtitle}>Jaen, Nueva Ecija</Text>
+          <Text style={[styles.subtitle, themed.subtext]}>Jaen, Nueva Ecija</Text>
         </View>
 
         <TouchableOpacity
-          style={styles.refreshButton}
+          style={[styles.refreshButton, themed.iconButton]}
           activeOpacity={0.78}
           onPress={isMapOverlay ? () => setExpanded((value) => !value) : () => fetchWeather(true)}
           disabled={loading || refreshing}
@@ -259,37 +264,37 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
             <Ionicons
               name={expanded ? "chevron-up" : "chevron-down"}
               size={18}
-              color="#1D6B41"
+              color={theme.primary}
             />
           ) : refreshing ? (
-            <ActivityIndicator size="small" color="#1D6B41" />
+            <ActivityIndicator size="small" color={theme.primary} />
           ) : (
-            <Ionicons name="refresh" size={18} color="#1D6B41" />
+            <Ionicons name="refresh" size={18} color={theme.primary} />
           )}
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <View style={[styles.stateCard, isMapOverlay && styles.mapStateCard]}>
-          <ActivityIndicator color="#1D6B41" size={isMapOverlay ? "small" : "large"} />
-          <Text style={styles.stateTitle}>Loading Jaen weather</Text>
+        <View style={[styles.stateCard, isMapOverlay && styles.mapStateCard, themed.card]}>
+          <ActivityIndicator color={theme.primary} size={isMapOverlay ? "small" : "large"} />
+          <Text style={[styles.stateTitle, themed.text]}>Loading Jaen weather</Text>
           {!isMapOverlay && (
-            <Text style={styles.stateText}>Getting the latest local forecast.</Text>
+            <Text style={[styles.stateText, themed.subtext]}>Getting the latest local forecast.</Text>
           )}
         </View>
       ) : error ? (
-        <View style={[styles.stateCard, isMapOverlay && styles.mapStateCard]}>
-          <View style={styles.stateIcon}>
-            <Ionicons name="cloud-offline-outline" size={22} color="#1D6B41" />
+        <View style={[styles.stateCard, isMapOverlay && styles.mapStateCard, themed.card]}>
+          <View style={[styles.stateIcon, themed.softCard]}>
+            <Ionicons name="cloud-offline-outline" size={22} color={theme.primary} />
           </View>
-          <Text style={styles.stateTitle}>Forecast unavailable</Text>
-          {!isMapOverlay && <Text style={styles.stateText}>{error}</Text>}
-          <TouchableOpacity style={styles.retryButton} onPress={() => fetchWeather(true)}>
-            <Text style={styles.retryText}>Try again</Text>
+          <Text style={[styles.stateTitle, themed.text]}>Forecast unavailable</Text>
+          {!isMapOverlay && <Text style={[styles.stateText, themed.subtext]}>{error}</Text>}
+          <TouchableOpacity style={[styles.retryButton, themed.softCard]} onPress={() => fetchWeather(true)}>
+            <Text style={[styles.retryText, themed.primaryText]}>Try again</Text>
           </TouchableOpacity>
         </View>
       ) : isMapOverlay ? (
-        <View style={styles.mapWeatherCard}>
+        <View style={[styles.mapWeatherCard, themed.card]}>
           <TouchableOpacity
             style={styles.mapWeatherMain}
             activeOpacity={0.86}
@@ -300,13 +305,13 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
             </View>
             <View style={styles.mapWeatherCopy}>
               <View style={styles.mapTempRow}>
-                <Text style={styles.mapTemp}>{current.temperature}</Text>
-                <Text style={styles.mapDegree}>C</Text>
-                <Text style={styles.mapCondition} numberOfLines={1}>
+                <Text style={[styles.mapTemp, themed.text]}>{current.temperature}</Text>
+                <Text style={[styles.mapDegree, themed.text]}>C</Text>
+                <Text style={[styles.mapCondition, themed.primaryText]} numberOfLines={1}>
                   {current.condition}
                 </Text>
               </View>
-              <Text style={styles.mapMeta} numberOfLines={1}>
+              <Text style={[styles.mapMeta, themed.subtext]} numberOfLines={1}>
                 Feels {current.feelsLike} C  |  Rain {formatPercent(current.rainChance)}
               </Text>
             </View>
@@ -322,17 +327,17 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
             ]}
           >
             <View style={styles.mapWeatherStats}>
-              <View style={styles.mapStatPill}>
-                <Ionicons name="water-outline" size={12} color="#14532D" />
-                <Text style={styles.mapStatText}>{current.humidity}</Text>
+              <View style={[styles.mapStatPill, themed.softCard]}>
+                <Ionicons name="water-outline" size={12} color={theme.primary} />
+                <Text style={[styles.mapStatText, themed.primaryText]}>{current.humidity}</Text>
               </View>
-              <View style={styles.mapStatPill}>
-                <Ionicons name="leaf-outline" size={12} color="#14532D" />
-                <Text style={styles.mapStatText}>{current.wind}</Text>
+              <View style={[styles.mapStatPill, themed.softCard]}>
+                <Ionicons name="leaf-outline" size={12} color={theme.primary} />
+                <Text style={[styles.mapStatText, themed.primaryText]}>{current.wind}</Text>
               </View>
-              <View style={styles.mapStatPill}>
-                <Ionicons name="thermometer-outline" size={12} color="#14532D" />
-                <Text style={styles.mapStatText}>
+              <View style={[styles.mapStatPill, themed.softCard]}>
+                <Ionicons name="thermometer-outline" size={12} color={theme.primary} />
+                <Text style={[styles.mapStatText, themed.primaryText]}>
                   {current.high}/{current.low} C
                 </Text>
               </View>
@@ -344,10 +349,10 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
               contentContainerStyle={styles.mapForecastList}
             >
               {weather.forecast.slice(0, 4).map((item) => (
-                <View key={item.key} style={styles.mapForecastChip}>
-                  <Text style={styles.mapForecastDay}>{item.day}</Text>
-                  <Ionicons name={item.icon} size={14} color="#1D6B41" />
-                  <Text style={styles.mapForecastTemp}>
+                <View key={item.key} style={[styles.mapForecastChip, themed.card]}>
+                  <Text style={[styles.mapForecastDay, themed.text]}>{item.day}</Text>
+                  <Ionicons name={item.icon} size={14} color={theme.primary} />
+                  <Text style={[styles.mapForecastTemp, themed.subtext]}>
                     {item.high}/{item.low}
                   </Text>
                 </View>
@@ -357,14 +362,14 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
         </View>
       ) : (
         <>
-          <View style={styles.currentCard}>
+          <View style={[styles.currentCard, themed.currentCard]}>
             <View style={styles.currentTopRow}>
               <View style={styles.conditionIcon}>
                 <Ionicons name={current.icon} size={28} color="#FFFFFF" />
               </View>
               <View style={styles.conditionCopy}>
                 <Text style={styles.conditionText}>{current.condition}</Text>
-                <Text style={styles.updatedText}>Real-time forecast from coordinates</Text>
+                <Text style={[styles.updatedText, themed.currentSubtext]}>Real-time forecast from coordinates</Text>
               </View>
               <View style={styles.rainChip}>
                 <Ionicons name="water-outline" size={13} color="#14532D" />
@@ -380,21 +385,21 @@ export default function JaenWeatherForecast({ variant = "panel", onWeatherChange
             </View>
 
             <View style={styles.statsGrid}>
-              <WeatherStat label="Feels like" value={`${current.feelsLike} C`} />
-              <WeatherStat label="Humidity" value={current.humidity} />
-              <WeatherStat label="Wind" value={current.wind} />
-              <WeatherStat label="High / Low" value={`${current.high} / ${current.low} C`} />
+              <WeatherStat label="Feels like" value={`${current.feelsLike} C`} theme={theme} />
+              <WeatherStat label="Humidity" value={current.humidity} theme={theme} />
+              <WeatherStat label="Wind" value={current.wind} theme={theme} />
+              <WeatherStat label="High / Low" value={`${current.high} / ${current.low} C`} theme={theme} />
             </View>
           </View>
 
-          <Text style={styles.forecastHeading}>Next days</Text>
+          <Text style={[styles.forecastHeading, themed.text]}>Next days</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.forecastList}
           >
             {weather.forecast.map((item) => (
-              <ForecastCard key={item.key} item={item} />
+              <ForecastCard key={item.key} item={item} theme={theme} themed={themed} />
             ))}
           </ScrollView>
         </>
@@ -802,3 +807,41 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 });
+
+function createWeatherThemeStyles(theme) {
+  return StyleSheet.create({
+    section: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softCard: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    iconButton: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    currentCard: {
+      backgroundColor: theme.mode === "dark" ? "#0F2F22" : "#123B28",
+      borderWidth: 1,
+      borderColor: theme.mode === "dark" ? "rgba(134,239,172,0.28)" : "transparent",
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+    primaryText: {
+      color: theme.primary,
+    },
+    currentSubtext: {
+      color: theme.mode === "dark" ? "#D7E8DC" : "#CDE8D3",
+    },
+  });
+}

@@ -26,6 +26,7 @@ const drrmoRoutes = require("./routes/drrmoRoutes");
 const reliefTrackingRoutes = require("./routes/reliefTrackingRoutes");
 const auditRoutes = require("./routes/auditRoutes");
 const guidelineRoutes = require("./routes/GuidelineRoutes");
+const announcementRoutes = require("./routes/AnnouncementRoutes");
 const connectionRoutes = require("./routes/connectionRoutes");
 const timeInOutRoutes = require("./routes/timeInOutRoutes");
 const editRoutes = require("./routes/editRoutes");
@@ -52,6 +53,9 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const guidelinesDir = path.join(uploadDir, "guidelines");
 if (!fs.existsSync(guidelinesDir)) fs.mkdirSync(guidelinesDir, { recursive: true });
+
+const announcementsDir = path.join(uploadDir, "announcements");
+if (!fs.existsSync(announcementsDir)) fs.mkdirSync(announcementsDir, { recursive: true });
 
 const inventoryDir = path.join(uploadDir, "inventory");
 if (!fs.existsSync(inventoryDir)) fs.mkdirSync(inventoryDir, { recursive: true });
@@ -230,6 +234,7 @@ app.get("/", (req, res) => {
 // --------------------
 app.use("/uploads", express.static(uploadDir));
 app.use("/uploads/guidelines", express.static(guidelinesDir));
+app.use("/uploads/announcements", express.static(announcementsDir));
 app.use("/uploads/inventory", express.static(inventoryDir));
 app.use("/uploads/goods", express.static(goodsDir));
 app.use("/uploads/monetary", express.static(monetaryDir));
@@ -241,6 +246,7 @@ app.use("/uploads/avatars", express.static(avatarsDir));
 // API Routes
 // --------------------
 app.use("/api/guidelines", guidelineRoutes);
+app.use("/api/announcements", announcementRoutes);
 app.use("/user", userRoutes);
 app.use("/incident", incidentRoutes);
 app.use("/history", historyRoutes);
@@ -374,6 +380,19 @@ mongoose.connection.once("open", async () => {
 // Start server
 // --------------------
 const PORT = process.env.PORT || 8000;
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${PORT} is already in use. Stop the other server using that port, or start this one with a different PORT value.`
+    );
+    console.error("Example: $env:PORT=8001; node server.js");
+    process.exit(1);
+  }
+
+  console.error("Server failed to start:", err);
+  process.exit(1);
+});
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);

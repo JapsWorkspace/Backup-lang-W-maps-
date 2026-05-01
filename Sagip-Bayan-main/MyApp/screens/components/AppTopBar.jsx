@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   TextInput,
@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { sanitizeSearchText, safeDisplayText } from "../utils/validation";
+import { useTheme } from "../contexts/ThemeContext";
 
 export default function AppTopBar({
   onMenuPress,
@@ -23,6 +24,8 @@ export default function AppTopBar({
 }) {
   // ✅ local controlled input state
   const [value, setValue] = useState("");
+  const { theme } = useTheme();
+  const themed = useMemo(() => createThemedStyles(theme), [theme]);
 
   const handleChangeText = (text) => {
     const cleanText = sanitizeSearchText(text);
@@ -57,33 +60,33 @@ export default function AppTopBar({
   return (
     <View style={styles.wrapper}>
       <View style={styles.container}>
-        <TouchableOpacity style={styles.iconButton} onPress={onMenuPress}>
-          <Ionicons name="menu" size={24} color="#10251b" />
+        <TouchableOpacity style={[styles.iconButton, themed.floatingSurface]} onPress={onMenuPress}>
+          <Ionicons name="menu" size={24} color={theme.text} />
         </TouchableOpacity>
 
         {showSearch && (
-          <View style={styles.searchWrap}>
-            <Ionicons name="search-outline" size={17} color="#6b7280" />
+          <View style={[styles.searchWrap, themed.floatingSurface]}>
+            <Ionicons name="search-outline" size={17} color={theme.subtext} />
             <TextInput
               placeholder="Search place in Jaen"
-              style={styles.search}
+              style={[styles.search, { color: theme.text }]}
               value={value}
               onChangeText={handleChangeText}
               autoCorrect={false}
               autoCapitalize="none"
               clearButtonMode="while-editing"
               returnKeyType="search"
-              placeholderTextColor="#7b867f"
+              placeholderTextColor={theme.subtext}
             />
           </View>
         )}
 
         <TouchableOpacity
-          style={styles.notificationButton}
+          style={[styles.notificationButton, themed.floatingSurface]}
           activeOpacity={0.82}
           onPress={onNotificationPress}
         >
-          <Ionicons name="notifications-outline" size={22} color="#10251b" />
+          <Ionicons name="notifications-outline" size={22} color={theme.text} />
           {notificationCount > 0 && (
             <View style={styles.notificationDot}>
               <Text style={styles.notificationCount}>
@@ -96,7 +99,7 @@ export default function AppTopBar({
 
       {/* ✅ Suggestions dropdown */}
       {showSearch && suggestions.length > 0 && (
-        <View style={styles.dropdown}>
+        <View style={[styles.dropdown, themed.dropdown]}>
           <FlatList
             data={suggestions}
             keyExtractor={(item, index) =>
@@ -110,12 +113,12 @@ export default function AppTopBar({
                 style={styles.item}
                 onPress={() => handleSelect(item)}
               >
-                <Text numberOfLines={2}>
+                <Text numberOfLines={2} style={{ color: theme.text }}>
                   {safeDisplayText(item?.label, "Unnamed place")}
                 </Text>
 
                 {item.source === "evacuation" && (
-                  <Text style={styles.badge}>EVAC CENTER</Text>
+                  <Text style={[styles.badge, { color: theme.primary }]}>EVAC CENTER</Text>
                 )}
               </TouchableOpacity>
             )}
@@ -233,3 +236,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
+
+function createThemedStyles(theme) {
+  return StyleSheet.create({
+    floatingSurface: {
+      backgroundColor: theme.elevated,
+      borderColor: theme.border,
+    },
+    dropdown: {
+      backgroundColor: theme.elevated,
+      borderColor: theme.border,
+      borderWidth: 1,
+    },
+  });
+}

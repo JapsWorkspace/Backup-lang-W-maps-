@@ -1,5 +1,5 @@
 // screens/Guidelines.jsx
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -18,14 +18,19 @@ import { Ionicons } from "@expo/vector-icons";
 import api from "../lib/api";
 import styles, { COLORS } from "../Designs/Guidelines";
 import { UserContext } from "./UserContext";
+import { NotificationContext } from "./contexts/NotificationContext";
+import { ThemeContext } from "./contexts/ThemeContext";
 import {
   isSafeHttpUrl,
   sanitizeSearchText,
   safeDisplayText,
 } from "./utils/validation";
 
-export default function GuidelinesListScreen({ navigation }) {
+export default function GuidelinesListScreen({ navigation, route }) {
   const { user } = useContext(UserContext) || {};
+  const { refreshNotifications } = useContext(NotificationContext) || {};
+  const { theme } = useContext(ThemeContext);
+  const themed = useMemo(() => createThemedGuidelineStyles(theme), [theme]);
   const [guidelines, setGuidelines] = useState([]);
   const [filteredGuidelines, setFilteredGuidelines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +38,7 @@ export default function GuidelinesListScreen({ navigation }) {
   const [searchText, setSearchText] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [selectedGuideline, setSelectedGuideline] = useState(null);
+  const openedRouteGuidelineIdRef = useRef(null);
   const categories = ["all", "earthquake", "flood", "typhoon", "general"];
 
   useEffect(() => {
@@ -71,6 +77,8 @@ export default function GuidelinesListScreen({ navigation }) {
 
     setGuidelines(visibleItems);
     setFilteredGuidelines(visibleItems);
+    console.log("[guidelines] fetched published count", visibleItems.length);
+    await refreshNotifications?.();
   } catch (error) {
     console.log("Error fetching guidelines:", {
       message: error?.message,
@@ -136,6 +144,61 @@ export default function GuidelinesListScreen({ navigation }) {
     }
   };
 
+  useEffect(() => {
+    const routeGuidelineId = route?.params?.guidelineId
+      ? String(route.params.guidelineId)
+      : "";
+
+    if (!routeGuidelineId || openedRouteGuidelineIdRef.current === routeGuidelineId) {
+      return;
+    }
+
+    const matchingGuideline = guidelines.find(
+      (item) => String(item?._id || item?.id || "") === routeGuidelineId
+    );
+
+    if (matchingGuideline) {
+      openedRouteGuidelineIdRef.current = routeGuidelineId;
+      openGuideline(matchingGuideline);
+      return;
+    }
+
+    let active = true;
+
+    const fetchGuidelineFromNotification = async () => {
+      try {
+        const response = await api.get(`/api/guidelines/${routeGuidelineId}`, {
+          params: { userId: user?._id },
+        });
+
+        if (!active || !response?.data?._id) return;
+
+        openedRouteGuidelineIdRef.current = routeGuidelineId;
+        setGuidelines((prev) => {
+          const exists = prev.some(
+            (item) => String(item?._id || item?.id || "") === routeGuidelineId
+          );
+          return exists ? prev : [response.data, ...prev];
+        });
+        setFilteredGuidelines((prev) => {
+          const exists = prev.some(
+            (item) => String(item?._id || item?.id || "") === routeGuidelineId
+          );
+          return exists ? prev : [response.data, ...prev];
+        });
+        openGuideline(response.data);
+      } catch (error) {
+        console.log("[guidelines] notification open failed:", error?.message);
+      }
+    };
+
+    fetchGuidelineFromNotification();
+
+    return () => {
+      active = false;
+    };
+  }, [guidelines, route?.params?.guidelineId, user?._id]);
+
   const toggleGuidelineLike = async (item) => {
     if (!user?._id || !item?._id) return;
 
@@ -151,29 +214,29 @@ export default function GuidelinesListScreen({ navigation }) {
 
   const renderItem = ({ item }) => (
     <TouchableOpacity
-      style={styles.card}
+      style={[styles.card, themed.card]}
       onPress={() => openGuideline(item)}
       activeOpacity={0.88}
     >
       <View style={localStyles.postHeader}>
-        <View style={localStyles.publisherAvatar}>
-          <Ionicons name="megaphone-outline" size={18} color={COLORS.green} />
+        <View style={[localStyles.publisherAvatar, themed.softIcon]}>
+          <Ionicons name="megaphone-outline" size={18} color={theme.primary} />
         </View>
         <View style={localStyles.publisherCopy}>
-          <Text style={localStyles.publisherName}>MDRRMO</Text>
-          <Text style={localStyles.publisherMeta}>
+          <Text style={[localStyles.publisherName, themed.text]}>MDRRMO</Text>
+          <Text style={[localStyles.publisherMeta, themed.mutedText]}>
             Official disaster guidance post
           </Text>
         </View>
       </View>
 
       <View style={localStyles.postBody}>
-        <Text style={styles.title} numberOfLines={2}>
+        <Text style={[styles.title, themed.text]} numberOfLines={2}>
           {safeDisplayText(item?.title, "Untitled guideline")}
         </Text>
 
         {!!item.description && (
-          <Text style={styles.desc} numberOfLines={4}>
+          <Text style={[styles.desc, themed.mutedText]} numberOfLines={4}>
             {safeDisplayText(item?.description, "")}
           </Text>
         )}
@@ -203,26 +266,26 @@ export default function GuidelinesListScreen({ navigation }) {
 
   if (loading) {
     return (
-      <View style={styles.loading}>
+      <View style={[styles.loading, themed.screen]}>
         <ActivityIndicator size="large" color={COLORS.green} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.phone}>
+    <View style={[styles.container, themed.screen]}>
+      <View style={[styles.phone, themed.screen]}>
         <View style={styles.headerRow}>
           <TouchableOpacity
-            style={styles.backBtn}
+            style={[styles.backBtn, themed.surfaceBorder]}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="chevron-back" size={22} color={COLORS.green} />
+            <Ionicons name="chevron-back" size={22} color={theme.primary} />
           </TouchableOpacity>
 
           <View style={styles.headerCopy}>
-            <Text style={styles.headerTitle}>Guidelines</Text>
-            <Text style={styles.headerSub}>
+            <Text style={[styles.headerTitle, themed.text]}>Guidelines</Text>
+            <Text style={[styles.headerSub, themed.mutedText]}>
               Preparedness notes and official safety references.
             </Text>
           </View>
@@ -251,19 +314,19 @@ export default function GuidelinesListScreen({ navigation }) {
           </View>
         </View>
 
-        <View style={styles.searchWrap}>
-          <Ionicons name="search-outline" size={18} color="#647067" />
+        <View style={[styles.searchWrap, themed.surfaceBorder]}>
+          <Ionicons name="search-outline" size={18} color={theme.mutedText} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, themed.text]}
             placeholder="Search by title"
             value={searchText}
             onChangeText={handleSearch}
-            placeholderTextColor={COLORS.placeholder}
+            placeholderTextColor={theme.mutedText}
           />
         </View>
 
         {suggestions.length > 0 && (
-          <View style={styles.suggestionsContainer}>
+          <View style={[styles.suggestionsContainer, themed.surfaceBorder]}>
             {suggestions.map((title, index) => (
               <TouchableOpacity
                 key={`${title}-${index}`}
@@ -275,15 +338,15 @@ export default function GuidelinesListScreen({ navigation }) {
                   size={15}
                   color="#647067"
                 />
-                <Text style={styles.suggestionText}>{title}</Text>
+                <Text style={[styles.suggestionText, themed.text]}>{title}</Text>
               </TouchableOpacity>
             ))}
           </View>
         )}
 
         <View style={styles.filterBlock}>
-          <Text style={styles.filterTitle}>Categories</Text>
-          <Text style={styles.filterSubtitle}>
+          <Text style={[styles.filterTitle, themed.text]}>Categories</Text>
+          <Text style={[styles.filterSubtitle, themed.mutedText]}>
             Quickly narrow the list by hazard type.
           </Text>
         </View>
@@ -294,10 +357,10 @@ export default function GuidelinesListScreen({ navigation }) {
             return (
               <TouchableOpacity
                 key={cat}
-                style={[styles.chip, active && styles.chipActive]}
+                style={[styles.chip, themed.surfaceBorder, active && styles.chipActive]}
                 onPress={() => setSelectedCategory(cat)}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                <Text style={[styles.chipText, themed.mutedText, active && styles.chipTextActive]}>
                   {cat}
                 </Text>
               </TouchableOpacity>
@@ -669,6 +732,31 @@ function getPrimaryImage(item) {
 
 function getNonImageAttachments(item) {
   return (item?.attachments || []).filter((file) => !isImageAttachment(file));
+}
+
+function createThemedGuidelineStyles(theme) {
+  return StyleSheet.create({
+    screen: {
+      backgroundColor: theme.background,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    surfaceBorder: {
+      backgroundColor: theme.surface,
+      borderColor: theme.border,
+    },
+    text: {
+      color: theme.text,
+    },
+    mutedText: {
+      color: theme.mutedText,
+    },
+    softIcon: {
+      backgroundColor: theme.primarySoft,
+    },
+  });
 }
 
 const localStyles = StyleSheet.create({

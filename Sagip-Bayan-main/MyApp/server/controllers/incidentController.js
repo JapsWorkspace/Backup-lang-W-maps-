@@ -3,6 +3,19 @@ const HistoryModel = require("../models/History");
 const UserModel = require("../models/User");
 const cloudinary = require("../config/cloudinary");
 
+const DUPLICATE_INCIDENT_RADIUS_METERS = 100;
+const DUPLICATE_INCIDENT_WINDOW_HOURS = 24;
+const INCIDENT_USER_ALERT_RADIUS_METERS = 1000;
+const INCIDENT_USER_ALERT_RECENT_HOURS = 24;
+const DUPLICATE_ACTIVE_STATUSES = [
+  "accepted",
+  "pending",
+  "reported",
+  "onProcess",
+  "onprocess",
+  "on process",
+];
+
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -59,6 +72,79 @@ function isAcceptedIncident(incident) {
   return normalizeStatus(incident?.status) === "accepted";
 }
 
+function toRadians(value) {
+  return (Number(value) * Math.PI) / 180;
+}
+
+function distanceMeters(pointA, pointB) {
+  if (!pointA || !pointB) return Number.POSITIVE_INFINITY;
+
+  const lat1 = Number(pointA.latitude);
+  const lon1 = Number(pointA.longitude);
+  const lat2 = Number(pointB.latitude);
+  const lon2 = Number(pointB.longitude);
+
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const earthRadiusMeters = 6371000;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildCoordinateBox(latitude, longitude, radiusMeters) {
+  const latDelta = radiusMeters / 111320;
+  const lngDelta =
+    radiusMeters /
+    (111320 * Math.max(Math.cos(toRadians(latitude)), 0.00001));
+
+  return {
+    minLat: latitude - latDelta,
+    maxLat: latitude + latDelta,
+    minLng: longitude - lngDelta,
+    maxLng: longitude + lngDelta,
+  };
+}
+
+async function findDuplicateIncident({ type, latitude, longitude }) {
+  const point = { latitude, longitude };
+  const box = buildCoordinateBox(
+    latitude,
+    longitude,
+    DUPLICATE_INCIDENT_RADIUS_METERS
+  );
+  const since = new Date(
+    Date.now() - DUPLICATE_INCIDENT_WINDOW_HOURS * 60 * 60 * 1000
+  );
+
+  const candidates = await IncidentModel.find({
+    type: { $regex: new RegExp(`^${escapeRegex(type)}$`, "i") },
+    status: { $in: DUPLICATE_ACTIVE_STATUSES },
+    createdAt: { $gte: since },
+    latitude: { $gte: box.minLat, $lte: box.maxLat },
+    longitude: { $gte: box.minLng, $lte: box.maxLng },
+  })
+    .sort({ createdAt: -1 })
+    .select("_id type status latitude longitude location createdAt");
+
+  return candidates.find(
+    (incident) =>
+      distanceMeters(point, {
+        latitude: incident.latitude,
+        longitude: incident.longitude,
+      }) <= DUPLICATE_INCIDENT_RADIUS_METERS
+  );
+}
+
 async function addNotification(userId, notification) {
   if (!userId) return;
 
@@ -72,6 +158,15 @@ async function addNotification(userId, notification) {
       notifications: {
         type: normalizeNotificationType(notification.type),
         message: notification.message,
+        notificationType: notification.notificationType || "normal",
+        soundType: notification.soundType || "notification",
+        incidentId: notification.incidentId || null,
+        targetBarangays: Array.isArray(notification.targetBarangays)
+          ? notification.targetBarangays
+          : [],
+        targetUsers: Array.isArray(notification.targetUsers)
+          ? notification.targetUsers
+          : [],
         connectionId: notification.connectionId || null,
         actorUserId: notification.actorUserId || null,
         actorName: notification.actorName || "",
@@ -91,20 +186,54 @@ async function addNotification(userId, notification) {
 async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePhone }) {
   try {
     if (!isAcceptedIncident(incident)) return;
+    const incidentCreatedAt = new Date(incident?.createdAt || Date.now());
+    const oldestAllowed = Date.now() - INCIDENT_USER_ALERT_RECENT_HOURS * 60 * 60 * 1000;
+    if (incidentCreatedAt.getTime() < oldestAllowed) return;
 
     const barangay = sanitizeText(incident?.barangay, 80);
-    if (!barangay) return;
+    const incidentPoint = {
+      latitude: Number(incident?.latitude),
+      longitude: Number(incident?.longitude),
+    };
+    if (!barangay && !Number.isFinite(incidentPoint.latitude)) return;
 
     const cleanExcludeUsername = sanitizeText(excludeUsername, 60).toLowerCase();
     const cleanExcludePhone = sanitizePhone(excludePhone);
 
-    const users = await UserModel.find({
-      barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
+    const query = {
       isArchived: { $ne: true },
-    }).select("_id fname lname username phone barangay notifications avatar");
+      $or: [],
+    };
+
+    if (barangay) {
+      query.$or.push({
+        barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
+      });
+    }
+
+    if (
+      Number.isFinite(incidentPoint.latitude) &&
+      Number.isFinite(incidentPoint.longitude)
+    ) {
+      const box = buildCoordinateBox(
+        incidentPoint.latitude,
+        incidentPoint.longitude,
+        INCIDENT_USER_ALERT_RADIUS_METERS
+      );
+      query.$or.push({
+        "location.lat": { $gte: box.minLat, $lte: box.maxLat },
+        "location.lng": { $gte: box.minLng, $lte: box.maxLng },
+      });
+    }
+
+    if (!query.$or.length) return;
+
+    const users = await UserModel.find(query).select(
+      "_id fname lname username phone barangay location notifications avatar"
+    );
 
     if (!users.length) {
-      console.log("[incident notify] No users found in barangay:", barangay);
+      console.log("[incident notify] No nearby users found:", barangay);
       return;
     }
 
@@ -126,7 +255,24 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
         userPhone &&
         userPhone === cleanExcludePhone;
 
-      return !sameUsername && !samePhone;
+      if (sameUsername || samePhone) return false;
+
+      const sameBarangay =
+        barangay &&
+        sanitizeText(user?.barangay, 80).toLowerCase() === barangay.toLowerCase();
+
+      const userPoint = {
+        latitude: Number(user?.location?.lat),
+        longitude: Number(user?.location?.lng),
+      };
+      const closeByCoordinate =
+        Number.isFinite(userPoint.latitude) &&
+        Number.isFinite(userPoint.longitude) &&
+        Number.isFinite(incidentPoint.latitude) &&
+        Number.isFinite(incidentPoint.longitude) &&
+        distanceMeters(incidentPoint, userPoint) <= INCIDENT_USER_ALERT_RADIUS_METERS;
+
+      return sameBarangay || closeByCoordinate;
     });
 
     if (!notifyTargets.length) {
@@ -139,7 +285,12 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
         addNotification(user._id, {
           type: notificationType,
           message,
-          dedupeKey: `incident:${incident._id}:barangay:${barangay.toLowerCase()}`,
+          notificationType: "danger",
+          soundType: "danger",
+          incidentId: incident._id,
+          targetBarangays: barangay ? [barangay] : [],
+          targetUsers: [user._id],
+          dedupeKey: `incident:${incident._id}:user:${user._id}`,
           actionable: false,
         })
       )
@@ -201,6 +352,8 @@ async function notifyNearbyRepeatedIncidents(incident) {
         addNotification(user._id, {
           type: "nearby_repeated_incident",
           message,
+          notificationType: "danger",
+          soundType: "danger",
           dedupeKey: `nearby-repeated:${windowKey}`,
           actionable: false,
         })
@@ -252,16 +405,6 @@ const getIncidents = async (req, res) => {
 const registerIncident = async (req, res) => {
   try {
     if (!req.body) req.body = {};
-
-    const uploadedFiles = Array.isArray(req.files)
-      ? req.files
-      : req.files
-        ? Object.values(req.files).flat()
-        : req.file
-          ? [req.file]
-          : [];
-    const imageItems = await Promise.all(uploadedFiles.map(uploadIncidentFile));
-    const imageData = imageItems[0] || null;
 
     const type = sanitizeText(req.body.type, 60);
     const level = sanitizeText(req.body.level, 40);
@@ -351,6 +494,40 @@ const registerIncident = async (req, res) => {
         message: "Valid incident coordinates are required.",
       });
     }
+
+    const duplicateIncident = await findDuplicateIncident({
+      type,
+      latitude,
+      longitude,
+    });
+
+    if (duplicateIncident) {
+      return res.status(409).json({
+        code: "DUPLICATE_INCIDENT",
+        title: "Similar Incident Already Reported",
+        message:
+          "An incident with the same category has already been reported near this area. Please check existing reports instead.",
+        duplicate: {
+          id: duplicateIncident._id,
+          type: duplicateIncident.type,
+          status: duplicateIncident.status,
+          latitude: duplicateIncident.latitude,
+          longitude: duplicateIncident.longitude,
+          location: duplicateIncident.location,
+          createdAt: duplicateIncident.createdAt,
+        },
+      });
+    }
+
+    const uploadedFiles = Array.isArray(req.files)
+      ? req.files
+      : req.files
+        ? Object.values(req.files).flat()
+        : req.file
+          ? [req.file]
+          : [];
+    const imageItems = await Promise.all(uploadedFiles.map(uploadIncidentFile));
+    const imageData = imageItems[0] || null;
 
     const newIncident = new IncidentModel({
       type,

@@ -35,6 +35,7 @@ import {
 } from "../lib/safetyMarkingApi";
 import { UserContext } from "./UserContext";
 import { NotificationContext } from "./contexts/NotificationContext";
+import { useTheme } from "./contexts/ThemeContext";
 import jaenGeoJSON from "./data/jaen.json";
 import { generateSeededJaenDebugLocation } from "./utils/safetyDebugLocation";
 import { isPointInsideJaen } from "./utils/jaenBounds";
@@ -139,6 +140,36 @@ const renderBoundary = (data, strokeColor, strokeWidth, fillColor) =>
           fillColor={fillColor}
         />,
       ];
+    });
+  });
+
+const renderBarangayBoundaryOutlines = (data) =>
+  safeArray(data?.features).flatMap((feature, index) => {
+    const geom = feature?.geometry;
+    if (!geom?.coordinates) return [];
+
+    const polygons =
+      geom.type === "Polygon"
+        ? [geom.coordinates]
+        : geom.type === "MultiPolygon"
+          ? geom.coordinates
+          : [];
+
+    return polygons.flatMap((poly, polyIndex) => {
+      const coords = toCoords(poly?.[0]);
+      if (!coords.length) return [];
+
+      return (
+        <Polygon
+          key={`safety-barangay-boundary-${index}-${polyIndex}`}
+          coordinates={coords}
+          strokeColor="rgba(22,101,52,0.72)"
+          strokeWidth={1.25}
+          fillColor="rgba(134,239,172,0.055)"
+          tappable={false}
+          zIndex={20}
+        />
+      );
     });
   });
 
@@ -333,28 +364,111 @@ function dedupeMarkersByUserId(markers) {
   });
 }
 
-function MetricCard({ label, value, tone = "neutral" }) {
+function createSafetyThemeStyles(theme) {
+  return StyleSheet.create({
+    floatingTabButton: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    floatingTabButtonActive: {
+      backgroundColor: theme.buttonPrimary,
+      borderColor: theme.buttonPrimary,
+    },
+    floatingTabText: {
+      color: theme.subtext,
+    },
+    floatingTabTextActive: {
+      color: theme.buttonText,
+    },
+    panel: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    panelDragZone: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    dragHandleWrap: {
+      backgroundColor: theme.panel,
+    },
+    dragHandle: {
+      backgroundColor: theme.border,
+    },
+    sheetIntro: {
+      backgroundColor: theme.panel,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    section: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    surfaceCard: {
+      backgroundColor: theme.surfaceAlt || theme.card,
+      borderColor: theme.border,
+    },
+    softCard: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    input: {
+      backgroundColor: theme.inputBackground,
+      borderColor: theme.border,
+      color: theme.text,
+    },
+    secondaryButton: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    dangerButton: {
+      backgroundColor: theme.danger === "#EF4444" ? "rgba(239,68,68,0.14)" : `${theme.danger}22`,
+      borderColor: theme.danger,
+    },
+    modalBackdrop: {
+      backgroundColor: theme.overlay,
+    },
+    modalCard: {
+      backgroundColor: theme.modalBackground,
+      borderColor: theme.border,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+    primaryText: {
+      color: theme.primary,
+    },
+  });
+}
+
+function MetricCard({ label, value, tone = "neutral", theme }) {
+  const toneColor =
+    tone === "safe" ? getSafetyColor("SAFE") : tone === "danger" ? getSafetyColor("NOT_SAFE") : theme.border;
+
   return (
     <View
       style={[
         styles.metricCard,
-        tone === "safe" && styles.metricCardSafe,
-        tone === "danger" && styles.metricCardDanger,
+        { backgroundColor: theme.card, borderColor: toneColor },
       ]}
     >
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={[styles.metricValue, { color: theme.text }]}>{value}</Text>
+      <Text style={[styles.metricLabel, { color: theme.subtext }]}>{label}</Text>
     </View>
   );
 }
 
-function SafetyStatusToggle({ value, disabled, onChange }) {
+function SafetyStatusToggle({ value, disabled, onChange, theme }) {
   return (
-    <View style={styles.statusToggleCard}>
+    <View style={[styles.statusToggleCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
       <View style={styles.statusToggleHeader}>
         <View style={styles.statusToggleTitleWrap}>
-          <Text style={styles.statusToggleEyebrow}>Updated Safety Status</Text>
-          <Text style={styles.statusToggleTitle}>Mark your current condition</Text>
+          <Text style={[styles.statusToggleEyebrow, { color: theme.primary }]}>Updated Safety Status</Text>
+          <Text style={[styles.statusToggleTitle, { color: theme.text }]}>Mark your current condition</Text>
         </View>
 
         <View
@@ -392,8 +506,8 @@ function SafetyStatusToggle({ value, disabled, onChange }) {
               style={({ pressed }) => [
                 styles.statusToggleButton,
                 {
-                  backgroundColor: active ? option.activeColor : option.softColor,
-                  borderColor: active ? option.activeColor : `${option.activeColor}22`,
+                  backgroundColor: active ? option.activeColor : theme.card,
+                  borderColor: active ? option.activeColor : theme.border,
                   opacity: disabled ? 0.68 : pressed ? 0.86 : 1,
                   transform: [{ scale: pressed && !disabled ? 0.985 : 1 }],
                 },
@@ -403,9 +517,7 @@ function SafetyStatusToggle({ value, disabled, onChange }) {
                 style={[
                   styles.statusToggleIconWrap,
                   {
-                    backgroundColor: active
-                      ? "rgba(255,255,255,0.18)"
-                      : "rgba(255,255,255,0.76)",
+                    backgroundColor: active ? "rgba(255,255,255,0.18)" : theme.surfaceAlt,
                   },
                 ]}
               >
@@ -420,7 +532,7 @@ function SafetyStatusToggle({ value, disabled, onChange }) {
                 <Text
                   style={[
                     styles.statusToggleButtonText,
-                    { color: active ? "#FFFFFF" : option.activeColor },
+                    { color: active ? theme.buttonText : theme.text },
                   ]}
                 >
                   {option.label}
@@ -428,7 +540,7 @@ function SafetyStatusToggle({ value, disabled, onChange }) {
                 <Text
                   style={[
                     styles.statusToggleButtonSubtext,
-                    { color: active ? "rgba(255,255,255,0.78)" : "#617066" },
+                    { color: active ? "rgba(255,255,255,0.78)" : theme.subtext },
                   ]}
                   numberOfLines={1}
                 >
@@ -446,6 +558,8 @@ function SafetyStatusToggle({ value, disabled, onChange }) {
 export default function SafetyMark() {
   const navigation = useNavigation();
   const route = useRoute();
+  const { theme } = useTheme();
+  const themed = useMemo(() => createSafetyThemeStyles(theme), [theme]);
   const { user } = useContext(UserContext);
   const { refreshNotifications, notificationsVersion } = useContext(NotificationContext);
   const mapRef = useRef(null);
@@ -758,6 +872,11 @@ export default function SafetyMark() {
 
   const jaenBoundary = useMemo(
     () => renderBoundary(jaenGeoJSON, "#365314", 2.2, "transparent"),
+    []
+  );
+
+  const barangayBoundaryOutlines = useMemo(
+    () => renderBarangayBoundaryOutlines(jaenGeoJSON),
     []
   );
 
@@ -1190,6 +1309,7 @@ export default function SafetyMark() {
         onRegionChangeComplete={handleRegionChangeComplete}
       >
         {jaenFocusMask}
+        {barangayBoundaryOutlines}
         {jaenBoundary}
         {visibleMembersOnMap.map((member) =>
           member.coordinate ? (
@@ -1231,19 +1351,21 @@ export default function SafetyMark() {
             <Pressable
               style={[
                 styles.floatingTabButton,
-                activeTab === "status" && styles.floatingTabButtonActive,
+                themed.floatingTabButton,
+                activeTab === "status" && themed.floatingTabButtonActive,
               ]}
               onPress={() => setActiveTab("status")}
             >
               <Ionicons
                 name="people-outline"
                 size={16}
-                color={activeTab === "status" ? "#FFFFFF" : "#516353"}
+                color={activeTab === "status" ? theme.buttonText : theme.subtext}
               />
               <Text
                 style={[
                   styles.floatingTabText,
-                  activeTab === "status" && styles.floatingTabTextActive,
+                  themed.floatingTabText,
+                  activeTab === "status" && themed.floatingTabTextActive,
                 ]}
               >
                 Status
@@ -1253,19 +1375,21 @@ export default function SafetyMark() {
             <Pressable
               style={[
                 styles.floatingTabButton,
-                activeTab === "manage" && styles.floatingTabButtonActive,
+                themed.floatingTabButton,
+                activeTab === "manage" && themed.floatingTabButtonActive,
               ]}
               onPress={() => setActiveTab("manage")}
             >
               <Ionicons
                 name="git-network-outline"
                 size={16}
-                color={activeTab === "manage" ? "#FFFFFF" : "#516353"}
+                color={activeTab === "manage" ? theme.buttonText : theme.subtext}
               />
               <Text
                 style={[
                   styles.floatingTabText,
-                  activeTab === "manage" && styles.floatingTabTextActive,
+                  themed.floatingTabText,
+                  activeTab === "manage" && themed.floatingTabTextActive,
                 ]}
               >
                 Manage
@@ -1275,19 +1399,21 @@ export default function SafetyMark() {
             <Pressable
               style={[
                 styles.floatingTabButton,
-                activeTab === "join" && styles.floatingTabButtonActive,
+                themed.floatingTabButton,
+                activeTab === "join" && themed.floatingTabButtonActive,
               ]}
               onPress={() => setActiveTab("join")}
             >
               <Ionicons
                 name="add-circle-outline"
                 size={16}
-                color={activeTab === "join" ? "#FFFFFF" : "#516353"}
+                color={activeTab === "join" ? theme.buttonText : theme.subtext}
               />
               <Text
                 style={[
                   styles.floatingTabText,
-                  activeTab === "join" && styles.floatingTabTextActive,
+                  themed.floatingTabText,
+                  activeTab === "join" && themed.floatingTabTextActive,
                 ]}
               >
                 Join + Create
@@ -1296,16 +1422,16 @@ export default function SafetyMark() {
           </View>
         </Animated.View>
 
-        <Animated.View style={[styles.panel, { top: panelTop }]}>
-          <View style={styles.panelDragZone} {...panResponder.panHandlers}>
-            <View style={styles.dragHandleWrap}>
-              <View style={styles.dragHandle} />
+        <Animated.View style={[styles.panel, themed.panel, { top: panelTop }]}>
+          <View style={[styles.panelDragZone, themed.panelDragZone]} {...panResponder.panHandlers}>
+            <View style={[styles.dragHandleWrap, themed.dragHandleWrap]}>
+              <View style={[styles.dragHandle, themed.dragHandle]} />
             </View>
 
-            <View style={styles.sheetIntro}>
+            <View style={[styles.sheetIntro, themed.sheetIntro]}>
               <View style={styles.sheetIntroCopy}>
-                <Text style={styles.sheetIntroTitle}>{activeTabMeta.title}</Text>
-                <Text style={styles.sheetIntroSubtitle}>{activeTabMeta.subtitle}</Text>
+                <Text style={[styles.sheetIntroTitle, themed.text]}>{activeTabMeta.title}</Text>
+                <Text style={[styles.sheetIntroSubtitle, themed.subtext]}>{activeTabMeta.subtitle}</Text>
               </View>
               <View
                 style={[
@@ -1330,14 +1456,14 @@ export default function SafetyMark() {
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.panelContent}
           >
-            <View style={styles.profileCard}>
+            <View style={[styles.profileCard, themed.card]}>
               <Image
                 source={{ uri: resolveAvatarPath(user?.avatar) }}
                 style={styles.profileAvatar}
               />
               <View style={styles.profileCopy}>
-                <Text style={styles.profileName}>{user?.username || "Resident"}</Text>
-                <Text style={styles.profileMeta}>
+                <Text style={[styles.profileName, themed.text]}>{user?.username || "Resident"}</Text>
+                <Text style={[styles.profileMeta, themed.subtext]}>
                   {connections.length} connection{connections.length === 1 ? "" : "s"}
                 </Text>
               </View>
@@ -1361,6 +1487,7 @@ export default function SafetyMark() {
             <Pressable
               style={[
                 styles.debugCard,
+                themed.softCard,
                 safetyDebugMode && styles.debugCardActive,
                 debugSyncing && styles.debugCardDisabled,
               ]}
@@ -1370,11 +1497,12 @@ export default function SafetyMark() {
               <Ionicons
                 name={safetyDebugMode ? "bug" : "bug-outline"}
                 size={18}
-                color={safetyDebugMode ? "#FFFFFF" : "#365314"}
+                color={safetyDebugMode ? "#FFFFFF" : theme.primary}
               />
               <Text
                 style={[
                   styles.debugCardText,
+                  themed.primaryText,
                   safetyDebugMode && styles.debugCardTextActive,
                 ]}
               >
@@ -1388,31 +1516,32 @@ export default function SafetyMark() {
               value={localSafetyStatus}
               disabled={loading}
               onChange={handleToggleSafetyStatus}
+              theme={theme}
             />
 
             <View style={styles.metricsRow}>
-              <MetricCard label="Members" value={memberCount} />
-              <MetricCard label="Safe" value={safeCount} tone="safe" />
-              <MetricCard label="Not Safe" value={notSafeCount} tone="danger" />
+              <MetricCard label="Members" value={memberCount} theme={theme} />
+              <MetricCard label="Safe" value={safeCount} tone="safe" theme={theme} />
+              <MetricCard label="Not Safe" value={notSafeCount} tone="danger" theme={theme} />
             </View>
 
             {activeTab === "status" && (
-              <View style={styles.section}>
+              <View style={[styles.section, themed.section]}>
                 {connections.length === 0 ? (
-                  <View style={styles.emptyStateCard}>
-                    <Text style={styles.emptyStateTitle}>No active connections yet</Text>
-                    <Text style={styles.emptyText}>
+                  <View style={[styles.emptyStateCard, themed.softCard]}>
+                    <Text style={[styles.emptyStateTitle, themed.text]}>No active connections yet</Text>
+                    <Text style={[styles.emptyText, themed.subtext]}>
                       Join or create a group to start seeing your people here.
                     </Text>
                   </View>
                 ) : (
                   <>
-                    <View style={styles.pickerShell}>
+                    <View style={[styles.pickerShell, themed.input]}>
                       <Picker
                         selectedValue={selectedConnection?.id || ""}
                         onValueChange={(value) => setSelectedConnectionId(value)}
-                        style={styles.picker}
-                        dropdownIconColor="#365314"
+                        style={[styles.picker, themed.text]}
+                        dropdownIconColor={theme.text}
                       >
                         {connections.map((connection) => (
                           <Picker.Item
@@ -1424,35 +1553,35 @@ export default function SafetyMark() {
                       </Picker>
                     </View>
 
-                    <View style={styles.statusSummary}>
+                    <View style={[styles.statusSummary, themed.softCard]}>
                       <View style={styles.statusSummaryTop}>
-                        <Text style={styles.statusSummaryEyebrow}>Selected group</Text>
-                        <View style={styles.statusSummaryCount}>
-                          <Text style={styles.statusSummaryCountValue}>
+                        <Text style={[styles.statusSummaryEyebrow, themed.primaryText]}>Selected group</Text>
+                        <View style={[styles.statusSummaryCount, themed.surfaceCard]}>
+                          <Text style={[styles.statusSummaryCountValue, themed.text]}>
                             {selectedConnectionMembers.length}
                           </Text>
-                          <Text style={styles.statusSummaryCountLabel}>people</Text>
+                          <Text style={[styles.statusSummaryCountLabel, themed.subtext]}>people</Text>
                         </View>
                       </View>
-                      <Text style={styles.statusSummaryTitle}>
+                      <Text style={[styles.statusSummaryTitle, themed.text]}>
                         {selectedConnection?.code || "Connection"}
                       </Text>
-                      <Text style={styles.statusSummaryMeta}>
+                      <Text style={[styles.statusSummaryMeta, themed.subtext]}>
                         {selectedConnectionMembers.length} members in this group
                       </Text>
                     </View>
 
                     <View style={styles.memberListCard}>
                       <View style={styles.listSectionHeader}>
-                        <Text style={styles.listSectionTitle}>People in this group</Text>
-                        <Text style={styles.listSectionMeta}>
+                        <Text style={[styles.listSectionTitle, themed.text]}>People in this group</Text>
+                        <Text style={[styles.listSectionMeta, themed.subtext]}>
                           Live safety and location updates
                         </Text>
                       </View>
                       {selectedConnectionMembers.map((member) => (
-                        <View key={member.id} style={styles.personRow}>
+                        <View key={member.id} style={[styles.personRow, themed.card]}>
                           <View style={styles.personCopy}>
-                            <Text style={styles.personName}>{member.username}</Text>
+                            <Text style={[styles.personName, themed.text]}>{member.username}</Text>
                             <View style={styles.personStatusRow}>
                               <View
                                 style={[
@@ -1460,7 +1589,7 @@ export default function SafetyMark() {
                                   { backgroundColor: member.safetyColor },
                                 ]}
                               />
-                              <View style={styles.personStatus}>
+                              <View style={[styles.personStatus, themed.surfaceCard]}>
                                 <Text
                                   style={[
                                     styles.personStatusText,
@@ -1471,7 +1600,7 @@ export default function SafetyMark() {
                                 </Text>
                               </View>
                             </View>
-                            <Text style={styles.personMeta}>
+                            <Text style={[styles.personMeta, themed.subtext]}>
                               {member.insideJaen || !member.location
                                 ? member.updatedLabel
                                 : "Outside the boundary of Jaen"}
@@ -1482,7 +1611,10 @@ export default function SafetyMark() {
                             <View
                               style={[
                                 styles.personAvatarDot,
-                                { backgroundColor: member.safetyColor },
+                                {
+                                  backgroundColor: member.safetyColor,
+                                  borderColor: theme.card,
+                                },
                               ]}
                             />
                           </View>
@@ -1495,18 +1627,18 @@ export default function SafetyMark() {
             )}
 
             {activeTab === "manage" && (
-              <View style={styles.section}>
+              <View style={[styles.section, themed.section]}>
                 <View style={styles.sectionLead}>
-                  <Text style={styles.sectionTitle}>Manage Connections</Text>
-                  <Text style={styles.sectionHint}>
+                  <Text style={[styles.sectionTitle, themed.text]}>Manage Connections</Text>
+                  <Text style={[styles.sectionHint, themed.subtext]}>
                     Browse your groups and manage leave or delete actions.
                   </Text>
                 </View>
 
                 {connections.length === 0 ? (
-                  <View style={styles.emptyStateCard}>
-                    <Text style={styles.emptyStateTitle}>No active connections yet</Text>
-                    <Text style={styles.emptyText}>
+                  <View style={[styles.emptyStateCard, themed.softCard]}>
+                    <Text style={[styles.emptyStateTitle, themed.text]}>No active connections yet</Text>
+                    <Text style={[styles.emptyText, themed.subtext]}>
                       Your connection list will appear here once you join or create one.
                     </Text>
                   </View>
@@ -1514,13 +1646,13 @@ export default function SafetyMark() {
                   connections.map((connection) => {
                     const active = selectedConnection?.id === connection.id;
                     return (
-                      <View key={connection.id} style={styles.connectionCard}>
+                      <View key={connection.id} style={[styles.connectionCard, themed.card]}>
                         <View style={styles.connectionCardHead}>
                           <View style={styles.connectionCardCopy}>
-                            <Text style={styles.connectionCardTitle}>
+                            <Text style={[styles.connectionCardTitle, themed.text]}>
                               Connection {connection.code}
                             </Text>
-                            <Text style={styles.connectionCardMeta}>
+                            <Text style={[styles.connectionCardMeta, themed.subtext]}>
                               {connection.members.length} members
                             </Text>
                           </View>
@@ -1551,10 +1683,10 @@ export default function SafetyMark() {
                             </Pressable>
                           ) : (
                             <Pressable
-                              style={styles.connectionActionNeutral}
+                              style={[styles.connectionActionNeutral, themed.secondaryButton]}
                               onPress={() => handleLeaveConnection(connection.id)}
                             >
-                              <Text style={styles.connectionActionNeutralText}>Leave</Text>
+                              <Text style={[styles.connectionActionNeutralText, themed.text]}>Leave</Text>
                             </Pressable>
                           )}
                         </View>
@@ -1564,30 +1696,42 @@ export default function SafetyMark() {
                 )}
 
                 {pendingRequests.length > 0 && (
-                  <View style={styles.pendingList}>
+                  <View style={[styles.pendingList, themed.card]}>
                     <View style={styles.sectionLead}>
-                      <Text style={styles.subsectionTitle}>Pending Requests</Text>
-                      <Text style={styles.sectionHint}>
+                      <Text style={[styles.subsectionTitle, themed.text]}>Pending Requests</Text>
+                      <Text style={[styles.sectionHint, themed.subtext]}>
                         Approve or reject people waiting to join your connection.
                       </Text>
                     </View>
                     {pendingRequests.map(({ connectionId, connectionCode, member }) => (
-                      <View key={`${connectionId}-${member.id}`} style={styles.pendingRow}>
+                      <View key={`${connectionId}-${member.id}`} style={[styles.pendingRow, themed.card]}>
                         <Image source={{ uri: member.avatar }} style={styles.pendingAvatar} />
                         <View style={styles.pendingCopy}>
-                          <Text style={styles.pendingName}>{member.name}</Text>
-                          <Text style={styles.pendingMeta}>
+                          <Text style={[styles.pendingName, themed.text]}>{member.name}</Text>
+                          <Text style={[styles.pendingMeta, themed.subtext]}>
                             @{member.username} • Request for {connectionCode}
                           </Text>
                         </View>
                         <Pressable
-                          style={styles.approveButton}
+                          style={[
+                            styles.approveButton,
+                            {
+                              backgroundColor: `${theme.primary}22`,
+                              borderColor: theme.primary,
+                            },
+                          ]}
                           onPress={() => handleApproveRequest(connectionId, member.id)}
                         >
                           <Text style={styles.approveButtonText}>Approve</Text>
                         </Pressable>
                         <Pressable
-                          style={styles.rejectButton}
+                          style={[
+                            styles.rejectButton,
+                            {
+                              backgroundColor: `${theme.danger}22`,
+                              borderColor: theme.danger,
+                            },
+                          ]}
                           onPress={() => handleRejectRequest(connectionId, member.id)}
                         >
                           <Text style={styles.rejectButtonText}>Reject</Text>
@@ -1600,24 +1744,24 @@ export default function SafetyMark() {
             )}
 
             {activeTab === "join" && (
-              <View style={styles.section}>
+              <View style={[styles.section, themed.section]}>
                 <View style={styles.sectionLead}>
-                  <Text style={styles.sectionTitle}>Join / Create</Text>
-                  <Text style={styles.sectionHint}>
+                  <Text style={[styles.sectionTitle, themed.text]}>Join / Create</Text>
+                  <Text style={[styles.sectionHint, themed.subtext]}>
                     Use a code to join another group or create a new one.
                   </Text>
                 </View>
 
-                <View style={styles.formCard}>
-                  <Text style={styles.formLabel}>Connection code</Text>
+                <View style={[styles.formCard, themed.card]}>
+                  <Text style={[styles.formLabel, themed.text]}>Connection code</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, themed.input]}
                     value={joinCode}
                     onChangeText={(value) =>
                       setJoinCode(sanitizeConnectionCode(value))
                     }
                     placeholder="Enter connection code"
-                    placeholderTextColor="#7C8A7E"
+                    placeholderTextColor={theme.subtext}
                     autoCapitalize="characters"
                     autoCorrect={false}
                     maxLength={12}
@@ -1627,13 +1771,13 @@ export default function SafetyMark() {
                   </Pressable>
                 </View>
 
-                <View style={styles.formCard}>
-                  <Text style={styles.formLabel}>Start a new group</Text>
-                  <Text style={styles.formHint}>
+                <View style={[styles.formCard, themed.card]}>
+                  <Text style={[styles.formLabel, themed.text]}>Start a new group</Text>
+                  <Text style={[styles.formHint, themed.subtext]}>
                     Create a connection and invite people using the generated code.
                   </Text>
-                  <Pressable style={styles.createWideButton} onPress={handleCreateConnection}>
-                    <Text style={styles.createWideButtonText}>Create New Connection</Text>
+                  <Pressable style={[styles.createWideButton, themed.secondaryButton]} onPress={handleCreateConnection}>
+                    <Text style={[styles.createWideButtonText, themed.primaryText]}>Create New Connection</Text>
                   </Pressable>
                 </View>
               </View>
@@ -1648,13 +1792,13 @@ export default function SafetyMark() {
         animationType="fade"
         onRequestClose={() => setJoinRequestModalVisible(false)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalIconWrap}>
+        <View style={[styles.modalBackdrop, themed.modalBackdrop]}>
+          <View style={[styles.modalCard, themed.modalCard]}>
+            <View style={[styles.modalIconWrap, themed.softCard]}>
               <Ionicons name="checkmark-circle" size={34} color="#1D6B41" />
             </View>
-            <Text style={styles.modalTitle}>Request Sent</Text>
-            <Text style={styles.modalMessage}>
+            <Text style={[styles.modalTitle, themed.text]}>Request Sent</Text>
+            <Text style={[styles.modalMessage, themed.subtext]}>
               {joinRequestModalMessage}
             </Text>
             <Pressable

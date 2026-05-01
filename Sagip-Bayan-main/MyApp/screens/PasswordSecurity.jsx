@@ -1,5 +1,5 @@
 // screens/PasswordSecurity.jsx
-import React, { useContext, useState } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import {
   TextInput,
   View,
@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
+import { useTheme } from "./contexts/ThemeContext";
 import styles, { COLORS } from "../Designs/PasswordSecurity";
 import { getPasswordError } from "./utils/validation";
 
@@ -25,6 +26,8 @@ function getUserId(user) {
 
 export default function PasswordSecurity({ navigation }) {
   const { user, setUser } = useContext(UserContext);
+  const { theme } = useTheme();
+  const themed = useMemo(() => createPasswordThemeStyles(theme), [theme]);
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -211,52 +214,52 @@ export default function PasswordSecurity({ navigation }) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.webFrame}
+      style={[styles.webFrame, themed.screen]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
     >
       <ScrollView
-        style={styles.phone}
+        style={[styles.phone, themed.screen]}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerRow}>
           <TouchableOpacity
-            style={styles.backBtn}
+            style={[styles.backBtn, themed.card]}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="chevron-back" size={22} color={COLORS.green} />
+            <Ionicons name="chevron-back" size={22} color={theme.primary} />
           </TouchableOpacity>
 
           <View style={styles.headerCopy}>
-            <Text style={styles.headerTitle}>Password & Security</Text>
-            <Text style={styles.subText}>
+            <Text style={[styles.headerTitle, themed.text]}>Password & Security</Text>
+            <Text style={[styles.subText, themed.subtext]}>
               Protect account access and sign-in recovery.
             </Text>
           </View>
         </View>
 
-        <View style={styles.securityHero}>
-          <View style={styles.heroIcon}>
+        <View style={[styles.securityHero, themed.card]}>
+          <View style={[styles.heroIcon, themed.softCard]}>
             <Ionicons
               name="shield-checkmark-outline"
               size={28}
-              color={COLORS.green}
+              color={theme.primary}
             />
           </View>
 
           <View style={styles.heroCopy}>
-            <Text style={styles.heroTitle}>Security center</Text>
-            <Text style={styles.heroText}>
+            <Text style={[styles.heroTitle, themed.text]}>Security center</Text>
+            <Text style={[styles.heroText, themed.subtext]}>
               Use a unique password and keep two-factor authentication ready for
               sensitive changes.
             </Text>
           </View>
         </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Change password</Text>
+        <View style={[styles.sectionCard, themed.card]}>
+          <Text style={[styles.sectionTitle, themed.text]}>Change password</Text>
 
           <PasswordField
             label="Current Password"
@@ -267,6 +270,8 @@ export default function PasswordSecurity({ navigation }) {
             }}
             visible={showCurrentPassword}
             onToggleVisibility={() => setShowCurrentPassword((prev) => !prev)}
+            theme={theme}
+            themed={themed}
           />
 
           <PasswordField
@@ -275,6 +280,8 @@ export default function PasswordSecurity({ navigation }) {
             onChangeText={handleNewPassword}
             visible={showNewPassword}
             onToggleVisibility={() => setShowNewPassword((prev) => !prev)}
+            theme={theme}
+            themed={themed}
           />
 
           {newPasswordError ? (
@@ -287,6 +294,8 @@ export default function PasswordSecurity({ navigation }) {
             onChangeText={handleConfirmPassword}
             visible={showConfirmPassword}
             onToggleVisibility={() => setShowConfirmPassword((prev) => !prev)}
+            theme={theme}
+            themed={themed}
           />
 
           {confirmPasswordError ? (
@@ -296,14 +305,14 @@ export default function PasswordSecurity({ navigation }) {
           {submitError ? <Text style={styles.error}>{submitError}</Text> : null}
 
           <View style={styles.ruleGrid}>
-            <Rule checked={newPassword.length >= 8} text="8+ characters" />
-            <Rule checked={/[A-Za-z]/.test(newPassword)} text="Letter" />
-            <Rule checked={/[0-9]/.test(newPassword)} text="Number" />
-            <Rule checked={matches} text="Matches" />
+            <Rule checked={newPassword.length >= 8} text="8+ characters" theme={theme} />
+            <Rule checked={/[A-Za-z]/.test(newPassword)} text="Letter" theme={theme} />
+            <Rule checked={/[0-9]/.test(newPassword)} text="Number" theme={theme} />
+            <Rule checked={matches} text="Matches" theme={theme} />
           </View>
 
           <TouchableOpacity
-            style={[styles.button, isSaving && { opacity: 0.65 }]}
+            style={[styles.button, { backgroundColor: theme.buttonPrimary }, isSaving && { opacity: 0.65 }]}
             onPress={updatePassword}
             disabled={isSaving}
           >
@@ -313,15 +322,15 @@ export default function PasswordSecurity({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.twoFAWrapper}>
+        <View style={[styles.twoFAWrapper, themed.card]}>
           <View style={styles.twoFATop}>
-            <View style={styles.twoFAIcon}>
-              <Ionicons name="key-outline" size={20} color={COLORS.green} />
+            <View style={[styles.twoFAIcon, themed.softCard]}>
+              <Ionicons name="key-outline" size={20} color={theme.primary} />
             </View>
 
             <View style={styles.twoFACopy}>
-              <Text style={styles.sectionTitle}>Two-Factor Authentication</Text>
-              <Text style={styles.subInfo}>
+              <Text style={[styles.sectionTitle, themed.text]}>Two-Factor Authentication</Text>
+              <Text style={[styles.subInfo, themed.subtext]}>
                 Require a verification code when signing in.
               </Text>
             </View>
@@ -348,16 +357,18 @@ function PasswordField({
   onChangeText,
   visible,
   onToggleVisibility,
+  theme,
+  themed,
 }) {
   return (
     <View style={styles.inputWrap}>
-      <Text style={styles.inputLabel}>{label}</Text>
+      <Text style={[styles.inputLabel, themed.text]}>{label}</Text>
 
       <View style={localStyles.passwordFieldShell}>
         <TextInput
-          style={[styles.input, localStyles.passwordInput]}
+          style={[styles.input, localStyles.passwordInput, themed.input]}
           placeholder={label}
-          placeholderTextColor={COLORS.placeholder}
+          placeholderTextColor={theme.subtext}
           secureTextEntry={!visible}
           value={value}
           onChangeText={onChangeText}
@@ -371,9 +382,9 @@ function PasswordField({
           <Ionicons
             name={visible ? "eye-off-outline" : "eye-outline"}
             size={18}
-            color="#4D5D54"
+            color={theme.primary}
           />
-          <Text style={localStyles.passwordToggleText}>
+          <Text style={[localStyles.passwordToggleText, { color: theme.primary }]}>
             {visible ? "Hide" : "Show"}
           </Text>
         </TouchableOpacity>
@@ -382,15 +393,15 @@ function PasswordField({
   );
 }
 
-function Rule({ checked, text }) {
+function Rule({ checked, text, theme }) {
   return (
-    <View style={[styles.rulePill, checked && styles.rulePillOk]}>
+    <View style={[styles.rulePill, { backgroundColor: theme.surfaceAlt, borderColor: theme.border }, checked && styles.rulePillOk]}>
       <Ionicons
         name={checked ? "checkmark-circle" : "ellipse-outline"}
         size={14}
         color={checked ? "#166534" : "#94A3B8"}
       />
-      <Text style={[styles.ruleText, checked && styles.ruleTextOk]}>{text}</Text>
+      <Text style={[styles.ruleText, { color: theme.subtext }, checked && styles.ruleTextOk]}>{text}</Text>
     </View>
   );
 }
@@ -422,3 +433,30 @@ const localStyles = StyleSheet.create({
     fontWeight: "800",
   },
 });
+
+function createPasswordThemeStyles(theme) {
+  return StyleSheet.create({
+    screen: {
+      backgroundColor: theme.background,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softCard: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+    input: {
+      backgroundColor: theme.inputBackground,
+      borderColor: theme.border,
+      color: theme.text,
+    },
+  });
+}

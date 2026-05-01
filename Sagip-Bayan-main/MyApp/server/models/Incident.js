@@ -124,6 +124,7 @@ const incidentSchema = new mongoose.Schema(
 
 incidentSchema.index({ status: 1, createdAt: -1 });
 incidentSchema.index({ status: 1, barangay: 1, type: 1, createdAt: -1 });
+incidentSchema.index({ status: 1, type: 1, createdAt: -1, latitude: 1, longitude: 1 });
 
 const IncidentModel = mongoose.model("Incident", incidentSchema);
 

@@ -1,9 +1,12 @@
 const UserModel = require("../models/User");
+const PostingGuideline = require("../models/Guidelines");
 const crypto = require("crypto");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const sendOTP = require("../utils/sendOTP");
 const cloudinary = require("../config/cloudinary");
 const bcrypt = require("bcryptjs");
+
+const GUIDELINE_NOTIFICATION_LOOKBACK_DAYS = 30;
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -34,6 +37,80 @@ function normalizeEmail(value) {
 
 function buildFullAddress({ district, barangay, street }) {
   return [street, barangay, district, "Jaen, Nueva Ecija"].filter(Boolean).join(", ");
+}
+
+function buildGuidelineNotification(guideline) {
+  const title = sanitizeText(guideline?.title, 120) || "Untitled guideline";
+  const dedupeKey = `guideline:${guideline._id}:published`;
+
+  return {
+    type: "guideline",
+    title: "New Guideline Posted",
+    message: `MDRRMO posted a new guideline: ${title}`,
+    target: "all",
+    source: "mdrrmo",
+    notificationType: "normal",
+    soundType: "notification",
+    guidelineId: guideline._id,
+    sourceLabel: "MDRRMO",
+    official: true,
+    dedupeKey,
+    actionable: false,
+    read: false,
+    isRead: false,
+    createdAt: guideline.publishedNotificationSentAt || guideline.updatedAt || new Date(),
+  };
+}
+
+async function syncRecentGuidelineNotificationsForUser(user) {
+  const existingDedupeKeys = new Set(
+    (user.notifications || [])
+      .map((item) => String(item?.dedupeKey || ""))
+      .filter(Boolean)
+  );
+  const cutoff = new Date(
+    Date.now() - GUIDELINE_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  const publishedGuidelines = await PostingGuideline.find({
+    status: "published",
+    $or: [
+      { publishedNotificationSentAt: { $gte: cutoff } },
+      { updatedAt: { $gte: cutoff } },
+      { createdAt: { $gte: cutoff } },
+      { publishedNotificationSent: { $ne: true } },
+    ],
+  })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .limit(20);
+
+  const missingNotifications = publishedGuidelines
+    .filter((guideline) => {
+      const dedupeKey = `guideline:${guideline._id}:published`;
+      return !existingDedupeKeys.has(dedupeKey);
+    })
+    .map(buildGuidelineNotification);
+
+  console.log("[notifications] guideline sync check", {
+    userId: String(user._id),
+    publishedGuidelines: publishedGuidelines.length,
+    missingGuidelineNotifications: missingNotifications.length,
+  });
+
+  if (!missingNotifications.length) {
+    return user;
+  }
+
+  user.notifications.push(...missingNotifications);
+  await user.save();
+
+  console.log("[notifications] guideline notification created:", {
+    userId: String(user._id),
+    count: missingNotifications.length,
+  });
+  console.log("[notifications] notification type", "guideline");
+
+  return user;
 }
 
 /* =========================
@@ -656,11 +733,21 @@ const getUserNotifications = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    await syncRecentGuidelineNotificationsForUser(user);
+
     const notifications = Array.isArray(user.notifications)
       ? [...user.notifications].sort(
           (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
         )
       : [];
+
+    const types = notifications.map((item) => item.type);
+    const guidelineCount = notifications.filter(
+      (item) => String(item?.type || "").toLowerCase() === "guideline"
+    ).length;
+
+    console.log("[notifications] types:", types);
+    console.log("[notifications] guideline notifications:", guidelineCount);
 
     return res.json(notifications);
   } catch (err) {
@@ -673,7 +760,12 @@ const markNotificationsRead = async (req, res) => {
   try {
     const user = await UserModel.findByIdAndUpdate(
       req.params.id,
-      { $set: { "notifications.$[].read": true } },
+      {
+        $set: {
+          "notifications.$[].read": true,
+          "notifications.$[].isRead": true,
+        },
+      },
       { new: true }
     ).select("notifications");
 
@@ -754,6 +846,13 @@ const registerNotificationToken = async (req, res) => {
     const platform = String(req.body?.platform || "").trim();
     const deviceId = String(req.body?.deviceId || "").trim();
 
+    console.log("[push-token] current user", req.params.id);
+    console.log("[push-token] token received", {
+      hasToken: Boolean(token),
+      platform,
+      deviceId,
+    });
+
     if (!token) {
       return res.status(400).json({ message: "Notification token is required." });
     }
@@ -774,10 +873,16 @@ const registerNotificationToken = async (req, res) => {
     });
     await user.save();
 
+    console.log("[push-token] saved to backend", {
+      userId: String(user._id),
+      tokenCount: user.notificationTokens.length,
+    });
+
     return res.json({
       ok: true,
       message: "Notification token registered",
       tokenCount: user.notificationTokens.length,
+      tokenExists: user.notificationTokens.some((item) => item.token === token),
     });
   } catch (err) {
     console.error("Register notification token error:", err);

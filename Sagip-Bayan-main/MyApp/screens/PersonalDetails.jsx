@@ -15,6 +15,7 @@ import { Picker } from "@react-native-picker/picker";
 
 import api from "../lib/api";
 import { UserContext } from "./UserContext";
+import { useTheme } from "./contexts/ThemeContext";
 import styles, { COLORS } from "../Designs/PersonalDetails";
 import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import {
@@ -93,6 +94,8 @@ function getUserId(user) {
 
 export default function PersonalDetails({ navigation }) {
   const { user, setUser } = useContext(UserContext);
+  const { theme } = useTheme();
+  const themed = useMemo(() => createPersonalThemeStyles(theme), [theme]);
 
   const [username, setUsername] = useState(user?.username || "");
   const [phone, setPhone] = useState(
@@ -242,72 +245,72 @@ export default function PersonalDetails({ navigation }) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.webFrame}
+      style={[styles.webFrame, themed.screen]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
     >
       <ScrollView
         ref={scrollRef}
-        style={styles.phone}
+        style={[styles.phone, themed.screen]}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerRow}>
           <TouchableOpacity
-            style={styles.backBtn}
+            style={[styles.backBtn, themed.card]}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="chevron-back" size={22} color={COLORS.green} />
+            <Ionicons name="chevron-back" size={22} color={theme.primary} />
           </TouchableOpacity>
 
           <View style={styles.headerCopy}>
-            <Text style={styles.headerTitle}>Personal Details</Text>
-            <Text style={styles.subText}>
+            <Text style={[styles.headerTitle, themed.text]}>Personal Details</Text>
+            <Text style={[styles.subText, themed.subtext]}>
               Keep contact and address details accurate for alerts and recovery.
             </Text>
           </View>
         </View>
 
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
-            <Ionicons name="id-card-outline" size={23} color={COLORS.green} />
+        <View style={[styles.summaryCard, themed.card]}>
+          <View style={[styles.summaryIcon, themed.softCard]}>
+            <Ionicons name="id-card-outline" size={23} color={theme.primary} />
           </View>
 
           <View style={styles.summaryCopy}>
-            <Text style={styles.summaryTitle}>
+            <Text style={[styles.summaryTitle, themed.text]}>
               {safeDisplayText(user.fname, "User")}{" "}
               {safeDisplayText(user.lname, "")}
             </Text>
-            <Text style={styles.summaryMeta}>
+            <Text style={[styles.summaryMeta, themed.subtext]}>
               {safeDisplayText(user.email, "No email")}
             </Text>
           </View>
         </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Identity</Text>
-          <Field label="First Name" value={user.fname} editable={false} />
-          <Field label="Last Name" value={user.lname} editable={false} />
-          <Field label="Email" value={user.email} editable={false} />
+        <View style={[styles.sectionCard, themed.card]}>
+          <Text style={[styles.sectionTitle, themed.text]}>Identity</Text>
+          <Field label="First Name" value={user.fname} editable={false} theme={theme} />
+          <Field label="Last Name" value={user.lname} editable={false} theme={theme} />
+          <Field label="Email" value={user.email} editable={false} theme={theme} />
         </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Editable details</Text>
+        <View style={[styles.sectionCard, themed.card]}>
+          <Text style={[styles.sectionTitle, themed.text]}>Editable details</Text>
 
-          <Text style={styles.label}>Username</Text>
-          <Text style={styles.helper}>
+          <Text style={[styles.label, themed.text]}>Username</Text>
+          <Text style={[styles.helper, themed.subtext]}>
             Used as your resident identifier inside Sagip Bayan.
           </Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, themed.input]}
             value={username}
             onChangeText={(text) => {
               setUsername(sanitizeUsername(text));
               if (error) setError("");
             }}
             placeholder="Username"
-            placeholderTextColor={COLORS.placeholder}
+            placeholderTextColor={theme.subtext}
             autoCapitalize="none"
             autoCorrect={false}
             onFocus={() => scrollToInput("username")}
@@ -315,12 +318,12 @@ export default function PersonalDetails({ navigation }) {
             maxLength={24}
           />
 
-          <Text style={styles.label}>Phone Number</Text>
-          <Text style={styles.helper}>
+          <Text style={[styles.label, themed.text]}>Phone Number</Text>
+          <Text style={[styles.helper, themed.subtext]}>
             Used for urgent messages and account recovery.
           </Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, themed.input]}
             value={phone}
             onChangeText={(text) => {
               setPhone(sanitizePhoneLocal(text));
@@ -328,21 +331,21 @@ export default function PersonalDetails({ navigation }) {
             }}
             keyboardType="phone-pad"
             placeholder="Phone Number"
-            placeholderTextColor={COLORS.placeholder}
+            placeholderTextColor={theme.subtext}
             maxLength={10}
             onFocus={() => scrollToInput("phone")}
             onLayout={registerInput("phone")}
           />
 
-          <Text style={styles.label}>District</Text>
-          <Text style={styles.helper}>
+          <Text style={[styles.label, themed.text]}>District</Text>
+          <Text style={[styles.helper, themed.subtext]}>
             Select the district that your address belongs to.
           </Text>
-          <View style={styles.input}>
+          <View style={[styles.input, themed.input]}>
             <Picker
               selectedValue={district}
               onValueChange={onChangeDistrict}
-              style={{ color: district ? COLORS.text : COLORS.placeholder }}
+              style={{ color: district ? theme.text : theme.subtext }}
             >
               <Picker.Item label="Select district" value="" />
               {DISTRICT_OPTIONS.map((item) => (
@@ -351,11 +354,11 @@ export default function PersonalDetails({ navigation }) {
             </Picker>
           </View>
 
-          <Text style={styles.label}>Barangay</Text>
-          <Text style={styles.helper}>
+          <Text style={[styles.label, themed.text]}>Barangay</Text>
+          <Text style={[styles.helper, themed.subtext]}>
             Select your barangay so alerts can be matched to your area.
           </Text>
-          <View style={styles.input}>
+          <View style={[styles.input, themed.input]}>
             <Picker
               selectedValue={barangay}
               enabled={Boolean(district)}
@@ -364,7 +367,7 @@ export default function PersonalDetails({ navigation }) {
                 if (error) setError("");
               }}
               style={{
-                color: barangay ? COLORS.text : COLORS.placeholder,
+                color: barangay ? theme.text : theme.subtext,
                 opacity: district ? 1 : 0.6,
               }}
             >
@@ -378,19 +381,19 @@ export default function PersonalDetails({ navigation }) {
             </Picker>
           </View>
 
-          <Text style={styles.label}>Street / Address Details</Text>
-          <Text style={styles.helper}>
+          <Text style={[styles.label, themed.text]}>Street / Address Details</Text>
+          <Text style={[styles.helper, themed.subtext]}>
             Enter house number, street, purok, or other address details.
           </Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, themed.input]}
             value={street}
             onChangeText={(text) => {
               setStreet(sanitizeStreetDetails(text));
               if (error) setError("");
             }}
             placeholder="House no., street, purok, landmark"
-            placeholderTextColor={COLORS.placeholder}
+            placeholderTextColor={theme.subtext}
             autoCapitalize="words"
             maxLength={160}
             onFocus={() => scrollToInput("street")}
@@ -403,16 +406,16 @@ export default function PersonalDetails({ navigation }) {
               marginBottom: 12,
               padding: 12,
               borderRadius: 14,
-              backgroundColor: "#F7FAF8",
+              backgroundColor: theme.surfaceAlt,
               borderWidth: 1,
-              borderColor: "#E4ECE7",
+              borderColor: theme.border,
             }}
           >
             <Text
               style={{
                 fontSize: 11,
                 fontWeight: "800",
-                color: COLORS.muted || "#64748B",
+                color: theme.subtext,
                 marginBottom: 4,
                 textTransform: "uppercase",
               }}
@@ -423,7 +426,7 @@ export default function PersonalDetails({ navigation }) {
               style={{
                 fontSize: 13,
                 lineHeight: 18,
-                color: COLORS.text || "#10251b",
+                color: theme.text,
                 fontWeight: "700",
               }}
             >
@@ -440,7 +443,7 @@ export default function PersonalDetails({ navigation }) {
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <TouchableOpacity
-            style={[styles.button, isSaving && { opacity: 0.65 }]}
+            style={[styles.button, { backgroundColor: theme.buttonPrimary }, isSaving && { opacity: 0.65 }]}
             onPress={savePersonalDetails}
             disabled={isSaving}
           >
@@ -454,16 +457,43 @@ export default function PersonalDetails({ navigation }) {
   );
 }
 
-function Field({ label, value, editable }) {
+function Field({ label, value, editable, theme }) {
   return (
-    <View style={styles.readOnlyField}>
-      <Text style={styles.readOnlyLabel}>{label}</Text>
-      <Text style={styles.readOnlyValue} numberOfLines={1}>
+    <View style={[styles.readOnlyField, { backgroundColor: theme.surfaceAlt, borderColor: theme.border }]}>
+      <Text style={[styles.readOnlyLabel, { color: theme.subtext }]}>{label}</Text>
+      <Text style={[styles.readOnlyValue, { color: theme.text }]} numberOfLines={1}>
         {safeDisplayText(value, "Not set")}
       </Text>
       {!editable && (
-        <Ionicons name="lock-closed-outline" size={15} color="#94A3B8" />
+        <Ionicons name="lock-closed-outline" size={15} color={theme.subtext} />
       )}
     </View>
   );
+}
+
+function createPersonalThemeStyles(theme) {
+  return {
+    screen: {
+      backgroundColor: theme.background,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softCard: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+    input: {
+      backgroundColor: theme.inputBackground,
+      borderColor: theme.border,
+      color: theme.text,
+    },
+  };
 }

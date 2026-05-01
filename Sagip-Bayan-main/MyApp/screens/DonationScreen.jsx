@@ -32,7 +32,6 @@ import {
   sanitizePhoneLocal,
   sanitizeQuantity,
   sanitizeReferenceText,
-  sanitizeTextInput,
 } from "./utils/validation";
 
 const OFFLINE_QUEUE_KEY = "sagip_bayan_donation_queue_v2";
@@ -45,13 +44,6 @@ const ITEM_CATEGORIES = [
   ["medicine", "Medicine"],
   ["essentials", "Essentials"],
   ["other", "Other"],
-];
-
-const PAYMENT_METHODS = [
-  "GCash",
-  "Bank Transfer",
-  "Cash",
-  "Others",
 ];
 
 const STATUS_META = {
@@ -67,10 +59,6 @@ const INITIAL_FORM = {
   paymentMethod: "GCash",
   gcashReferenceNumber: "",
   gcashSender: "",
-  bankName: "",
-  bankAccountNumber: "",
-  transferReferenceNumber: "",
-  cashInstructions: "",
   category: "food",
   itemName: "",
   quantity: "",
@@ -172,23 +160,6 @@ export default function DonationScreen({ navigation }) {
 
   const buildPayload = () => {
     const nextErrors = {};
-    const donorName = sanitizeName(form.donorName) || user?.name || user?.username || "";
-    const donorPhone = sanitizePhoneLocal(form.donorPhone || user?.phone || "");
-    const barangay = sanitizeAlphaNumericText(form.barangay || user?.barangay || "", 80);
-    const location = sanitizeIncidentText(form.location, 160);
-
-    if (form.donorPhone && getPhoneError(form.donorPhone)) {
-      nextErrors.donorPhone = getPhoneError(form.donorPhone);
-    }
-
-    const base = {
-      donationType,
-      donorUserId: user?._id || "",
-      donorName,
-      donorPhone: donorPhone ? `0${donorPhone}` : "",
-      barangay,
-      location,
-    };
 
     if (donationType === "monetary") {
       const cleanAmount = sanitizeAmount(form.amount);
@@ -196,31 +167,11 @@ export default function DonationScreen({ navigation }) {
       if (!Number.isFinite(amount) || amount <= 0) {
         nextErrors.amount = "Enter a valid donation amount.";
       }
-      if (!sanitizeTextInput(form.paymentMethod, { maxLength: 40 })) {
-        nextErrors.paymentMethod = "Payment method is required.";
-      }
-
       const gcashReferenceNumber = sanitizeReferenceText(form.gcashReferenceNumber);
       const gcashSender = sanitizeAlphaNumericText(form.gcashSender, 80);
-      const bankName = sanitizeAlphaNumericText(form.bankName, 80);
-      const bankAccountNumber = sanitizeReferenceText(form.bankAccountNumber);
-      const transferReferenceNumber = sanitizeReferenceText(form.transferReferenceNumber);
-      const cashInstructions = sanitizeIncidentText(form.cashInstructions, 180);
 
-      if (form.paymentMethod === "GCash") {
-        if (!gcashReferenceNumber) nextErrors.gcashReferenceNumber = "Reference number is required.";
-        if (!gcashSender) nextErrors.gcashSender = "Sender name or number is required.";
-      }
-
-      if (form.paymentMethod === "Bank Transfer") {
-        if (!bankName) nextErrors.bankName = "Bank name is required.";
-        if (!bankAccountNumber) nextErrors.bankAccountNumber = "Account/reference number is required.";
-        if (!transferReferenceNumber) nextErrors.transferReferenceNumber = "Transfer reference is required.";
-      }
-
-      if (form.paymentMethod === "Cash" && !cashInstructions) {
-        nextErrors.cashInstructions = "Pickup/drop-off instruction is required.";
-      }
+      if (!gcashReferenceNumber) nextErrors.gcashReferenceNumber = "Reference number is required.";
+      if (!gcashSender) nextErrors.gcashSender = "Sender name or number is required.";
 
       if (Object.keys(nextErrors).length) {
         setErrors(nextErrors);
@@ -228,27 +179,27 @@ export default function DonationScreen({ navigation }) {
       }
 
       return {
-        ...base,
+        donationType,
+        donorUserId: user?._id || "",
         amount: String(amount),
-        paymentMethod: sanitizeTextInput(form.paymentMethod, { maxLength: 40 }),
+        paymentMethod: "GCash",
         gcashReferenceNumber,
         gcashSender,
-        bankName,
-        bankAccountNumber,
-        transferReferenceNumber,
-        cashInstructions,
-        referenceNumber:
-          gcashReferenceNumber ||
-          transferReferenceNumber ||
-          bankAccountNumber ||
-          "",
-        description: `Monetary donation via ${sanitizeTextInput(form.paymentMethod, { maxLength: 40 })}.`,
+        referenceNumber: gcashReferenceNumber,
+        description: "Monetary donation via GCash.",
       };
     }
 
+    const donorName = sanitizeName(form.donorName) || user?.name || user?.username || "";
+    const donorPhone = sanitizePhoneLocal(form.donorPhone || user?.phone || "");
+    const barangay = sanitizeAlphaNumericText(form.barangay || user?.barangay || "", 80);
+    const location = sanitizeIncidentText(form.location, 160);
     const quantity = Number(sanitizeQuantity(form.quantity));
     const itemName = sanitizeAlphaNumericText(form.itemName, 80);
     const description = sanitizeIncidentText(form.description, DONATION_DESCRIPTION_MAX_LENGTH);
+    if (form.donorPhone && getPhoneError(form.donorPhone)) {
+      nextErrors.donorPhone = getPhoneError(form.donorPhone);
+    }
     if (!itemName) nextErrors.itemName = "Item name is required.";
     if (!Number.isFinite(quantity) || quantity <= 0) {
       nextErrors.quantity = "Enter a valid item quantity.";
@@ -260,7 +211,12 @@ export default function DonationScreen({ navigation }) {
     }
 
     return {
-      ...base,
+      donationType,
+      donorUserId: user?._id || "",
+      donorName,
+      donorPhone: donorPhone ? `0${donorPhone}` : "",
+      barangay,
+      location,
       category: form.category,
       itemName,
       quantity: String(quantity),
@@ -383,11 +339,11 @@ export default function DonationScreen({ navigation }) {
             <Text style={styles.panelTitle}>
               {donationType === "monetary" ? "Monetary Donation" : "Item Donation"}
             </Text>
-            <Text style={styles.panelSubtitle}>
-              {donationType === "monetary"
-                ? "Enter the amount and payment channel used."
-                : "Describe the item and how MDRRMO can receive it."}
-            </Text>
+            {donationType !== "monetary" && (
+              <Text style={styles.panelSubtitle}>
+                Describe the item and how MDRRMO can receive it.
+              </Text>
+            )}
 
             {donationType === "monetary" ? (
             <MonetaryFields form={form} updateField={updateField} errors={errors} registerInput={registerInput} scrollToInput={scrollToInput} styles={styles} />
@@ -404,7 +360,9 @@ export default function DonationScreen({ navigation }) {
               />
             )}
 
-            <ContactFields form={form} updateField={updateField} errors={errors} registerInput={registerInput} scrollToInput={scrollToInput} styles={styles} />
+            {donationType !== "monetary" && (
+              <ContactFields form={form} updateField={updateField} errors={errors} registerInput={registerInput} scrollToInput={scrollToInput} styles={styles} />
+            )}
 
             <TouchableOpacity
               style={[styles.submitButton, submitting && styles.disabled]}
@@ -470,107 +428,32 @@ function MonetaryFields({ form, updateField, errors, registerInput, scrollToInpu
         />
         <FieldError message={errors.amount} styles={styles} />
       </Field>
-      <Field label="Payment method" styles={styles}>
-        <Picker
-          selectedValue={form.paymentMethod}
-          onValueChange={(value) => updateField("paymentMethod", value)}
-          style={styles.picker}
-          dropdownIconColor={styles.iconColor}
-        >
-          {PAYMENT_METHODS.map((method) => (
-            <Picker.Item key={method} label={method} value={method} />
-          ))}
-        </Picker>
+      <Field label="GCash reference number" styles={styles}>
+        <TextInput
+          style={styles.input}
+          placeholder="Reference number"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.gcashReferenceNumber}
+          onFocus={() => scrollToInput("gcashReferenceNumber")}
+          onLayout={registerInput("gcashReferenceNumber")}
+          onChangeText={(value) => updateField("gcashReferenceNumber", sanitizeReferenceText(value))}
+          maxLength={80}
+        />
+        <FieldError message={errors.gcashReferenceNumber} styles={styles} />
       </Field>
-      {form.paymentMethod === "GCash" && (
-        <>
-          <Field label="GCash reference number" styles={styles}>
-            <TextInput
-              style={styles.input}
-              placeholder="Reference number"
-              placeholderTextColor={styles.placeholderColor}
-              value={form.gcashReferenceNumber}
-              onFocus={() => scrollToInput("gcashReferenceNumber")}
-              onLayout={registerInput("gcashReferenceNumber")}
-              onChangeText={(value) => updateField("gcashReferenceNumber", sanitizeReferenceText(value))}
-              maxLength={80}
-            />
-            <FieldError message={errors.gcashReferenceNumber} styles={styles} />
-          </Field>
-          <Field label="GCash sender name or number" styles={styles}>
-            <TextInput
-              style={styles.input}
-              placeholder="Sender name / mobile number"
-              placeholderTextColor={styles.placeholderColor}
-              value={form.gcashSender}
-              onFocus={() => scrollToInput("gcashSender")}
-              onLayout={registerInput("gcashSender")}
-              onChangeText={(value) => updateField("gcashSender", sanitizeAlphaNumericText(value, 80))}
-              maxLength={80}
-            />
-            <FieldError message={errors.gcashSender} styles={styles} />
-          </Field>
-        </>
-      )}
-      {form.paymentMethod === "Bank Transfer" && (
-        <>
-          <Field label="Bank name" styles={styles}>
-            <TextInput
-              style={styles.input}
-              placeholder="Bank name"
-              placeholderTextColor={styles.placeholderColor}
-              value={form.bankName}
-              onFocus={() => scrollToInput("bankName")}
-              onLayout={registerInput("bankName")}
-              onChangeText={(value) => updateField("bankName", sanitizeAlphaNumericText(value, 80))}
-              maxLength={80}
-            />
-            <FieldError message={errors.bankName} styles={styles} />
-          </Field>
-          <Field label="Account / reference number" styles={styles}>
-            <TextInput
-              style={styles.input}
-              placeholder="Account or reference number"
-              placeholderTextColor={styles.placeholderColor}
-              value={form.bankAccountNumber}
-              onFocus={() => scrollToInput("bankAccountNumber")}
-              onLayout={registerInput("bankAccountNumber")}
-              onChangeText={(value) => updateField("bankAccountNumber", sanitizeReferenceText(value))}
-              maxLength={80}
-            />
-            <FieldError message={errors.bankAccountNumber} styles={styles} />
-          </Field>
-          <Field label="Transfer reference number" styles={styles}>
-            <TextInput
-              style={styles.input}
-              placeholder="Transfer reference"
-              placeholderTextColor={styles.placeholderColor}
-              value={form.transferReferenceNumber}
-              onFocus={() => scrollToInput("transferReferenceNumber")}
-              onLayout={registerInput("transferReferenceNumber")}
-              onChangeText={(value) => updateField("transferReferenceNumber", sanitizeReferenceText(value))}
-              maxLength={80}
-            />
-            <FieldError message={errors.transferReferenceNumber} styles={styles} />
-          </Field>
-        </>
-      )}
-      {form.paymentMethod === "Cash" && (
-        <Field label="Cash pickup/drop-off instruction" styles={styles}>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            multiline
-            placeholder="Preferred pickup/drop-off instructions"
-            placeholderTextColor={styles.placeholderColor}
-            value={form.cashInstructions}
-            onFocus={() => scrollToInput("cashInstructions")}
-            onLayout={registerInput("cashInstructions")}
-            onChangeText={(value) => updateField("cashInstructions", sanitizeIncidentText(value, 180))}
-            maxLength={180}
-          />
-          <FieldError message={errors.cashInstructions} styles={styles} />
-        </Field>
-      )}
+      <Field label="GCash sender name or number" styles={styles}>
+        <TextInput
+          style={styles.input}
+          placeholder="Sender name / mobile number"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.gcashSender}
+          onFocus={() => scrollToInput("gcashSender")}
+          onLayout={registerInput("gcashSender")}
+          onChangeText={(value) => updateField("gcashSender", sanitizeAlphaNumericText(value, 80))}
+          maxLength={80}
+        />
+        <FieldError message={errors.gcashSender} styles={styles} />
+      </Field>
     </>
   );
 }

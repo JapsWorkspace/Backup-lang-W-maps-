@@ -10,13 +10,16 @@ import MainCenter from "./MainCenter";
 import Map from "./Map";
 import Profile from "./Profile";
 import Guidelines from "./Guidelines";
+import Announcement from "./Announcement";
 import SafetyMark from "./SafetyMark";
 import PersonalDetails from "./PersonalDetails";
 import PasswordSecurity from "./PasswordSecurity";
 import DonationScreen from "./DonationScreen";
+import Settings from "./Settings";
 
 import { MapContext } from "./contexts/MapContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
+import { useTheme } from "./contexts/ThemeContext";
 import SearchProvider from "./SearchContext";
 import api from "../lib/api";
 
@@ -24,6 +27,7 @@ const Stack = createNativeStackNavigator();
 const MAP_UI_SCREENS = new Set(["Map"]);
 
 export default function AppShell() {
+  const { theme } = useTheme();
   const [activeMapModule, setActiveMapModule] = useState(null);
   const [panelState, setPanelState] = useState("HIDDEN");
   const [panelY, setPanelY] = useState(null);
@@ -172,6 +176,13 @@ export default function AppShell() {
                   }}
                 />
                 <Stack.Screen
+                  name="Announcement"
+                  component={Announcement}
+                  listeners={{
+                    focus: () => setCurrentScreen("Announcement"),
+                  }}
+                />
+                <Stack.Screen
                   name="Connection"
                   component={SafetyMark}
                   listeners={{
@@ -199,12 +210,27 @@ export default function AppShell() {
                     focus: () => setCurrentScreen("DonationScreen"),
                   }}
                 />
+                <Stack.Screen
+                  name="Settings"
+                  component={Settings}
+                  listeners={{
+                    focus: () => setCurrentScreen("Settings"),
+                  }}
+                />
               </Stack.Navigator>
             </AppLayout>
           </SearchProvider>
         </NotificationProvider>
 
-        {showBottomNav && <View style={styles.bottomSystemArea} pointerEvents="none" />}
+        {showBottomNav && (
+          <View
+            style={[
+              styles.bottomSystemArea,
+              { backgroundColor: "transparent", borderTopColor: "transparent" },
+            ]}
+            pointerEvents="none"
+          />
+        )}
 
         {showBottomNav && (
           <View style={styles.navWrapper} pointerEvents="box-none">

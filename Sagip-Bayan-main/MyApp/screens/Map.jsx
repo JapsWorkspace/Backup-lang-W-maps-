@@ -32,11 +32,13 @@ import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 
-import api, { uploadSingleFile } from "../lib/api";
+import api, { postMultipart } from "../lib/api";
+import { playDangerNotificationSound } from "../utils/notificationSounds";
 import JaenWeatherForecast from "./components/JaenWeatherForecast";
 import { UserContext } from "./UserContext";
 import { MapContext } from "./contexts/MapContext";
-import { ThemeContext } from "./contexts/ThemeContext";
+import { NotificationContext } from "./contexts/NotificationContext";
+import { useTheme } from "./contexts/ThemeContext";
 import useRouting from "./hooks/useRouting";
 import useHazardLayers, { FLOOD_STYLES } from "./hooks/useHazardLayers";
 import { PillMarker } from "./MapIcon";
@@ -92,6 +94,16 @@ const NAV_PANEL_COLLAPSED_OFFSET = Math.max(
 const NAV_PANEL_HALF_OFFSET = Math.round(NAV_PANEL_COLLAPSED_OFFSET / 2);
 const NAV_PANEL_DEFAULT_OFFSET = NAV_PANEL_HALF_OFFSET;
 const NAV_PANEL_MAX_OFFSET = NAV_PANEL_COLLAPSED_OFFSET;
+const INCIDENT_IMAGE_LIMIT = 2;
+const INCIDENT_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+const SIMILAR_INCIDENT_TITLE = "Similar Incident Already Reported";
+const SIMILAR_INCIDENT_MESSAGE =
+  "An incident with the same category has already been reported near this area. Please check existing reports instead.";
+const ROUTE_HAZARD_ROUTE_RADIUS_METERS = 100;
+const ROUTE_HAZARD_THRESHOLDS_METERS = [300, 100];
+const ROUTE_HAZARD_CHECK_INTERVAL_MS = 2500;
+const INCIDENT_CLUSTER_MIN_REPORTS = 5;
+const INCIDENT_CLUSTER_MIN_BARANGAYS = 2;
 
 const MODULES = [
   { key: "incident", label: "Incident" },
@@ -251,6 +263,89 @@ const EMPTY_INCIDENT = {
   phone: "",
 };
 
+function normalizeIncidentPickerAsset(asset, index = 0) {
+  if (!asset?.uri) return null;
+
+  const name =
+    asset.fileName ||
+    asset.uri.split("/").pop() ||
+    `incident-photo-${index + 1}.jpg`;
+  const extension = String(name.split(".").pop() || "jpg").toLowerCase();
+  const mimeType =
+    asset.mimeType ||
+    (extension === "png"
+      ? "image/png"
+      : extension === "webp"
+        ? "image/webp"
+        : "image/jpeg");
+
+  return {
+    uri: asset.uri,
+    name,
+    type: mimeType,
+    size: Number(asset.fileSize || 0),
+  };
+}
+
+function validateIncidentImages(images) {
+  const validImages = safeArray(images).filter((item) => item?.uri);
+
+  if (validImages.length > INCIDENT_IMAGE_LIMIT) {
+    return `Only up to ${INCIDENT_IMAGE_LIMIT} photos are allowed.`;
+  }
+
+  const invalidType = validImages.find(
+    (item) => !String(item.type || "").toLowerCase().startsWith("image/")
+  );
+  if (invalidType) return "Please choose a valid image file.";
+
+  const oversized = validImages.find(
+    (item) => Number(item.size || 0) > INCIDENT_IMAGE_MAX_BYTES
+  );
+  if (oversized) return "Each incident photo must be 15 MB or smaller.";
+
+  return "";
+}
+
+function getIncidentImageItems(incidentImage) {
+  if (!incidentImage) return [];
+  return Array.isArray(incidentImage.items)
+    ? incidentImage.items.filter((item) => item?.uri)
+    : incidentImage.uri
+      ? [incidentImage]
+      : [];
+}
+
+function buildIncidentFormData(parameters, images) {
+  const formData = new FormData();
+
+  Object.entries(parameters || {}).forEach(([key, value]) => {
+    formData.append(key, value == null ? "" : String(value));
+  });
+
+  safeArray(images)
+    .slice(0, INCIDENT_IMAGE_LIMIT)
+    .forEach((image, index) => {
+      formData.append("images", {
+        uri: image.uri,
+        name: image.name || `incident-photo-${index + 1}.jpg`,
+        type: image.type || "image/jpeg",
+      });
+    });
+
+  return formData;
+}
+
+function smoothSpeed(previousKmh, nextMetersPerSecond) {
+  const nextKmh =
+    Number.isFinite(nextMetersPerSecond) && nextMetersPerSecond > 0
+      ? nextMetersPerSecond * 3.6
+      : 0;
+
+  if (!Number.isFinite(previousKmh)) return nextKmh;
+  return previousKmh * 0.65 + nextKmh * 0.35;
+}
+
 const formatCoordinateAddress = (latitude, longitude, prefix = "Map pin") =>
   `${prefix}: ${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
 
@@ -268,8 +363,61 @@ const formatReverseGeocodeAddress = (place, latitude, longitude) => {
 
   return parts.length
     ? parts.join(", ")
-    : formatCoordinateAddress(latitude, longitude, "Current location");
+    : "Jaen, Nueva Ecija";
 };
+
+function compactAddressParts(parts) {
+  const seen = new Set();
+  return parts
+    .map((part) => sanitizeIncidentText(part, 160))
+    .filter(Boolean)
+    .filter((part) => {
+      const key = part.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function getReverseGeocodeRoad(place) {
+  return sanitizeStreetDetails(
+    place?.street || place?.name || place?.district || "Jaen, Nueva Ecija"
+  );
+}
+
+function getReverseGeocodeBarangay(place) {
+  const candidates = [place?.district, place?.subregion, place?.name];
+  const barangays = Object.values(BARANGAY_BY_DISTRICT).flat();
+
+  return (
+    barangays.find((barangay) => {
+      const normalizedBarangay = String(barangay).toLowerCase();
+      return candidates.some((candidate) =>
+        String(candidate || "").toLowerCase().includes(normalizedBarangay)
+      );
+    }) || ""
+  );
+}
+
+function buildReadableNavigationAddress({ place, barangay, road }) {
+  const cleanBarangay = sanitizeAlphaNumericTextForDisplay(barangay || "Unknown barangay");
+  const municipality = sanitizeIncidentText(place?.city || "Jaen", 80);
+  const region = sanitizeIncidentText(place?.region || "Nueva Ecija", 80);
+  const primaryRoad = sanitizeStreetDetails(
+    road || place?.street || place?.name || "Near current route"
+  );
+
+  return compactAddressParts([
+    primaryRoad,
+    cleanBarangay ? `Barangay ${cleanBarangay.replace(/^barangay\s+/i, "")}` : "",
+    municipality,
+    region,
+  ]).join(", ");
+}
+
+function sanitizeAlphaNumericTextForDisplay(value) {
+  return sanitizeIncidentText(value, 100).replace(/[^A-Za-z0-9\s-]/g, "");
+}
 
 const safeArray = (arr) => (Array.isArray(arr) ? arr : []);
 const safeFeatures = (data) => safeArray(data?.features);
@@ -553,6 +701,209 @@ function distanceKm(a, b) {
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
 
   return 2 * earthRadiusKm * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function distanceMetersBetween(a, b) {
+  const km = distanceKm(a, b);
+  return km == null ? null : km * 1000;
+}
+
+function formatIncidentType(type) {
+  const clean = safeDisplayText(type, "Road hazard").toLowerCase();
+  const labels = {
+    flood: "Flood",
+    fire: "Fire",
+    accident: "Accident",
+    "road blockage": "Road blockage",
+    blockage: "Road blockage",
+    typhoon: "Typhoon hazard",
+    earthquake: "Earthquake hazard",
+  };
+  return labels[clean] || clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
+function normalizeIncidentCategory(type) {
+  const clean = String(type || "").trim().toLowerCase();
+  if (clean.includes("flood")) return "flood";
+  if (clean.includes("earthquake")) return "earthquake";
+  if (clean.includes("typhoon") || clean.includes("storm")) return "typhoon";
+  if (clean.includes("accident") || clean.includes("collision")) return "accident";
+  if (clean.includes("block") || clean.includes("obstruction")) return "road_block";
+  if (clean.includes("fire")) return "fire";
+  return clean || "incident";
+}
+
+function getIncidentCategoryIcon(category) {
+  switch (normalizeIncidentCategory(category)) {
+    case "flood":
+      return "water-outline";
+    case "earthquake":
+      return "pulse-outline";
+    case "typhoon":
+      return "thunderstorm-outline";
+    case "accident":
+      return "car-sport-outline";
+    case "road_block":
+      return "trail-sign-outline";
+    case "fire":
+      return "flame-outline";
+    default:
+      return "warning-outline";
+  }
+}
+
+function getRouteHazardMessage(incident, threshold) {
+  const category = normalizeIncidentCategory(incident?.type);
+  const urgent = threshold <= 100;
+
+  if (category === "flood") {
+    return urgent
+      ? "Flood ahead. Proceed carefully."
+      : "In 300 meters, flooding has been reported ahead. Slow down.";
+  }
+  if (category === "earthquake") {
+    return "Possible structural damage ahead. Stay alert.";
+  }
+  if (category === "typhoon") {
+    return "Strong winds or storm damage reported ahead.";
+  }
+  if (category === "accident") {
+    return "Accident reported ahead. Be ready to stop.";
+  }
+  if (category === "road_block") {
+    return "Road obstruction ahead. Prepare to reroute.";
+  }
+
+  return "Incident reported ahead. Proceed with caution.";
+}
+
+function formatDistanceMeters(meters) {
+  const value = Number(meters || 0);
+  if (!Number.isFinite(value)) return "--";
+  if (value >= 1000) return `${(value / 1000).toFixed(1)} km`;
+  return `${Math.max(10, Math.round(value / 10) * 10)} m`;
+}
+
+function getRouteDistanceToIndex(routeCoords, startIndex, endIndex) {
+  let meters = 0;
+  const start = Math.max(0, startIndex);
+  const end = Math.min(routeCoords.length - 1, endIndex);
+
+  for (let index = start; index < end; index += 1) {
+    meters += distanceMetersBetween(routeCoords[index], routeCoords[index + 1]) || 0;
+  }
+
+  return meters;
+}
+
+function findIncidentAheadOnRoute({ routeCoords, currentLocation, incidents }) {
+  const coords = safeArray(routeCoords).filter((coord) =>
+    isValidCoordinate(coord?.latitude, coord?.longitude)
+  );
+
+  if (coords.length < 2 || !isValidCoordinate(currentLocation?.latitude, currentLocation?.longitude)) {
+    return null;
+  }
+
+  const progress = getNearestRouteProgress(coords, currentLocation);
+  const currentIndex = progress.index;
+
+  return safeArray(incidents)
+    .map((incident) => {
+      const incidentPoint = {
+        latitude: Number(incident?.latitude),
+        longitude: Number(incident?.longitude),
+      };
+
+      if (!isValidCoordinate(incidentPoint.latitude, incidentPoint.longitude)) {
+        return null;
+      }
+
+      let nearestIndex = -1;
+      let nearestMeters = Infinity;
+
+      coords.forEach((coord, index) => {
+        const meters = distanceMetersBetween(coord, incidentPoint);
+        if (meters != null && meters < nearestMeters) {
+          nearestMeters = meters;
+          nearestIndex = index;
+        }
+      });
+
+      if (
+        nearestIndex <= currentIndex ||
+        nearestMeters > ROUTE_HAZARD_ROUTE_RADIUS_METERS
+      ) {
+        return null;
+      }
+
+      const distanceAheadMeters =
+        getRouteDistanceToIndex(coords, currentIndex, nearestIndex) +
+        (distanceMetersBetween(progress.snappedLocation, coords[currentIndex]) || 0);
+
+      return {
+        incident,
+        nearestIndex,
+        routeOffsetMeters: nearestMeters,
+        distanceAheadMeters,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.distanceAheadMeters - b.distanceAheadMeters)[0] || null;
+}
+
+function RouteHazardAlertPanel({ alert }) {
+  const slideAnim = useRef(new Animated.Value(-22)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    slideAnim.setValue(-22);
+    opacityAnim.setValue(0);
+
+    Animated.parallel([
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        damping: 17,
+        stiffness: 190,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [alert?.id, opacityAnim, slideAnim]);
+
+  if (!alert) return null;
+
+  const urgent = Number(alert.threshold || 0) <= 100;
+
+  return (
+    <Animated.View
+      pointerEvents="box-none"
+      style={[
+        styles.routeHazardBanner,
+        {
+          opacity: opacityAnim,
+          transform: [{ translateY: slideAnim }],
+        },
+        urgent && styles.routeHazardBannerUrgent,
+      ]}
+    >
+      <View style={[styles.routeHazardIcon, urgent && styles.routeHazardIconUrgent]}>
+        <Ionicons name={alert.icon || "warning-outline"} size={20} color="#FFFFFF" />
+      </View>
+      <View style={styles.routeHazardCopy}>
+        <Text style={styles.routeHazardText} numberOfLines={2}>
+          {alert.message}
+        </Text>
+        <Text style={styles.routeHazardDistance}>
+          {formatDistanceMeters(alert.distanceAheadMeters)} ahead
+        </Text>
+      </View>
+    </Animated.View>
+  );
 }
 
 function normalizePlace(place) {
@@ -1082,7 +1433,8 @@ export default function Map() {
   const navRoute = useRoute();
   const lastPlaceKeyRef = useRef(null);
   const { user } = useContext(UserContext) || {};
-  const { theme } = useContext(ThemeContext);
+  const { theme } = useTheme();
+  const themedOverlay = useMemo(() => createMapOverlayThemeStyles(theme), [theme]);
 
   const [mongoBarangays, setMongoBarangays] = useState(null);
   const [incidentDraft, setIncidentDraft] = useState(EMPTY_INCIDENT);
@@ -1091,8 +1443,10 @@ export default function Map() {
   const [incidentErrors, setIncidentErrors] = useState({});
   const [incidentBusy, setIncidentBusy] = useState(false);
   const [incidentLocating, setIncidentLocating] = useState(false);
+  const [quickReportVisible, setQuickReportVisible] = useState(false);
 const [mapWeather, setMapWeather] = useState(null);
 const [fogPulseLevel, setFogPulseLevel] = useState(0.65);
+const [heatPulseLevel, setHeatPulseLevel] = useState(0.45);
 const [selectedBarangay, setSelectedBarangay] = useState(null);
 const [showIncidentMarkers, setShowIncidentMarkers] = useState(false);
 const [showBarangayMarkers, setShowBarangayMarkers] = useState(false);
@@ -1122,16 +1476,21 @@ const {
   setShowEarthquakeHazard,
   isBottomNavInteracting,
 } = useContext(MapContext);
+  const { addNotification } = useContext(NotificationContext) || {};
 
   const isClampingRegionRef = useRef(false);
   const recentModuleChangeRef = useRef(Date.now());
   const lastNavigationCameraAtRef = useRef(0);
   const recenterTimerRef = useRef(null);
+  const routeHazardAlertedRef = useRef(new Set());
+  const clusterAlertedRef = useRef(new Set());
   const [isNavigating, setIsNavigating] = useState(false);
   const [followMode, setFollowMode] = useState(false);
   const [currentHeading, setCurrentHeading] = useState(0);
   const [currentLocation, setCurrentLocation] = useState(USER_POS);
   const [nextRoutePoint, setNextRoutePoint] = useState(null);
+  const [currentSpeedKmh, setCurrentSpeedKmh] = useState(0);
+  const [routeHazardBanner, setRouteHazardBanner] = useState(null);
 
   const requestedModule = MODULES.some((item) => item.key === navRoute.params?.module)
     ? navRoute.params.module
@@ -1310,6 +1669,18 @@ const {
     () => activeRoute || routes[0] || null,
     [activeRoute, routes]
   );
+  const activeNavigationRouteKey = useMemo(
+    () =>
+      activeNavigationRoute
+        ? `${activeNavigationRoute.id || "route"}:${safeArray(activeNavigationRoute.coords).length}:${activeNavigationRoute.summary?.km || ""}`
+        : "",
+    [activeNavigationRoute]
+  );
+
+  useEffect(() => {
+    routeHazardAlertedRef.current.clear();
+    setRouteHazardBanner(null);
+  }, [activeNavigationRouteKey]);
 
   const updateNavigationCamera = useCallback(
     (force = false) => {
@@ -1463,6 +1834,117 @@ const {
 
     return () => clearInterval(intervalId);
   }, [followMode, isNavigating, updateNavigationCamera]);
+
+  useEffect(() => {
+    if (!isEvac || !isNavigating || !activeNavigationRoute?.coords?.length) {
+      setRouteHazardBanner(null);
+      routeHazardAlertedRef.current.clear();
+      return;
+    }
+
+    const checkRouteHazards = () => {
+      const hazard = findIncidentAheadOnRoute({
+        routeCoords: activeNavigationRoute.coords,
+        currentLocation,
+        incidents: normalizedIncidents,
+      });
+
+      if (!hazard) {
+        setRouteHazardBanner(null);
+        return;
+      }
+
+      const threshold = [...ROUTE_HAZARD_THRESHOLDS_METERS].sort((a, b) => a - b).find(
+        (item) => hazard.distanceAheadMeters <= item
+      );
+
+      if (!threshold) return;
+
+      const incidentId =
+        hazard.incident?._id ||
+        `${hazard.incident?.type}-${hazard.incident?.latitude}-${hazard.incident?.longitude}`;
+      const alertKey = `${incidentId}:${threshold}`;
+      if (routeHazardAlertedRef.current.has(alertKey)) return;
+
+      routeHazardAlertedRef.current.add(alertKey);
+
+      const category = normalizeIncidentCategory(hazard.incident?.type);
+      const message = getRouteHazardMessage(hazard.incident, threshold);
+
+      setRouteHazardBanner({
+        id: alertKey,
+        message,
+        incident: hazard.incident,
+        threshold,
+        category,
+        icon: getIncidentCategoryIcon(category),
+        distanceAheadMeters: hazard.distanceAheadMeters,
+        routeOffsetMeters: hazard.routeOffsetMeters,
+        createdAt: Date.now(),
+      });
+      playDangerNotificationSound();
+    };
+
+    checkRouteHazards();
+    const intervalId = setInterval(checkRouteHazards, ROUTE_HAZARD_CHECK_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [
+    activeNavigationRoute,
+    currentLocation,
+    isEvac,
+    isNavigating,
+    normalizedIncidents,
+  ]);
+
+  useEffect(() => {
+    if (!isNavigating || !["driving", "cycling"].includes(travelMode)) {
+      setCurrentSpeedKmh(0);
+      return undefined;
+    }
+
+    let subscription = null;
+    let mounted = true;
+
+    async function watchGpsSpeed() {
+      if (Platform.OS === "web") {
+        setCurrentSpeedKmh(0);
+        return;
+      }
+
+      try {
+        const Location = await import("expo-location");
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (!mounted || permission.status !== "granted") {
+          setCurrentSpeedKmh(0);
+          return;
+        }
+
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1200,
+            distanceInterval: 2,
+          },
+          (position) => {
+            const gpsSpeed = Number(position?.coords?.speed);
+            setCurrentSpeedKmh((previous) => smoothSpeed(previous, gpsSpeed));
+          }
+        );
+      } catch (err) {
+        console.log("GPS speed watch failed:", err?.message);
+        setCurrentSpeedKmh(0);
+      }
+    }
+
+    watchGpsSpeed();
+
+    return () => {
+      mounted = false;
+      subscription?.remove?.();
+    };
+  }, [isNavigating, travelMode]);
 
   const jaenBoundary = useMemo(
     () => renderBoundary(jaenGeoJSON, "jaen", "#065F46", 2.5, "transparent"),
@@ -1648,6 +2130,89 @@ const homepageBarangays = useMemo(() => {
     [incidentBarangayCounts]
   );
 
+  useEffect(() => {
+    if (!maxBarangayIncidentCount) {
+      setHeatPulseLevel(0.45);
+      return undefined;
+    }
+
+    const intervalId = setInterval(() => {
+      setHeatPulseLevel((value) => (value < 0.72 ? 0.86 : 0.45));
+    }, 1200);
+
+    return () => clearInterval(intervalId);
+  }, [maxBarangayIncidentCount]);
+
+  const incidentClusterWarnings = useMemo(() => {
+    const grouped = {};
+
+    Object.entries(incidentBarangayCounts).forEach(([barangayId, stat]) => {
+      Object.entries(stat?.typeCounts || {}).forEach(([type, count]) => {
+        const category = normalizeIncidentCategory(type);
+        if (!grouped[category]) {
+          grouped[category] = {
+            category,
+            type,
+            total: 0,
+            barangays: [],
+          };
+        }
+
+        grouped[category].total += Number(count || 0);
+        if (count > 0) {
+          const barangay = homepageBarangays.find((item) => item.id === barangayId);
+          grouped[category].barangays.push({
+            id: barangayId,
+            label: barangay?.label || "Nearby barangay",
+            count: Number(count || 0),
+          });
+        }
+      });
+    });
+
+    return Object.values(grouped).filter(
+      (item) =>
+        item.total >= INCIDENT_CLUSTER_MIN_REPORTS &&
+        item.barangays.length >= INCIDENT_CLUSTER_MIN_BARANGAYS
+    );
+  }, [homepageBarangays, incidentBarangayCounts]);
+
+  useEffect(() => {
+    if (typeof addNotification !== "function") return;
+
+    incidentClusterWarnings.forEach((cluster) => {
+      const key = `${cluster.category}:${cluster.barangays
+        .map((barangay) => barangay.id)
+        .sort()
+        .join("|")}`;
+
+      if (clusterAlertedRef.current.has(key)) return;
+      clusterAlertedRef.current.add(key);
+
+      const categoryLabel = formatIncidentType(cluster.category).toLowerCase();
+      const message =
+        cluster.category === "flood"
+          ? "Multiple nearby barangays have reported flooding. Stay alert."
+          : `${cluster.barangays.length} barangays reported the same incident nearby. Be careful.`;
+
+      addNotification({
+        type: "nearby_repeated_incident",
+        title: "Clustered incident reports",
+        message,
+        icon: getIncidentCategoryIcon(cluster.category),
+        notificationType: "danger",
+        soundType: "danger",
+        sourceLabel: "Incident Alert",
+        official: true,
+        incidentCluster: {
+          category: categoryLabel,
+          total: cluster.total,
+          barangays: cluster.barangays.map((item) => item.label),
+        },
+      });
+    });
+  }, [addNotification, incidentClusterWarnings]);
+
 const selectedBarangayIncidents = useMemo(() => {
   if (!selectedBarangay) return normalizedIncidents;
 
@@ -1790,6 +2355,8 @@ const shouldShowIncidentMarkers =
     setCurrentLocation(USER_POS);
     setNextRoutePoint(null);
     setCurrentHeading(0);
+    setRouteHazardBanner(null);
+    routeHazardAlertedRef.current.clear();
     setRouteRequested(false);
     setRoutes([]);
     setActiveRoute(null);
@@ -1817,6 +2384,8 @@ const shouldShowIncidentMarkers =
     setFollowMode(false);
     setNextRoutePoint(null);
     setCurrentHeading(0);
+    setRouteHazardBanner(null);
+    routeHazardAlertedRef.current.clear();
     setActiveMapModule(null);
     setPanelState("HIDDEN");
     setPanelY(null);
@@ -1848,6 +2417,8 @@ const shouldShowIncidentMarkers =
       setFollowMode(false);
       setNextRoutePoint(null);
       setCurrentHeading(0);
+      setRouteHazardBanner(null);
+      routeHazardAlertedRef.current.clear();
 
       mapRef.current?.fitToCoordinates([USER_POS, normalizedPlace], {
         edgePadding: EDGE_PADDING,
@@ -1857,7 +2428,7 @@ const shouldShowIncidentMarkers =
     [setActiveRoute, setEvac, setPanelState, setPanelY, setRouteRequested, setRoutes]
   );
   
- const handleMapPress = useCallback(
+  const handleMapPress = useCallback(
   (event) => {
     if (!isIncident) return;
 
@@ -1916,7 +2487,11 @@ const shouldShowIncidentMarkers =
       ...prev,
       district: detectedDistrict,
       barangay: detectedBarangay,
-      location: formatCoordinateAddress(latitude, longitude),
+      location: compactAddressParts([
+        detectedBarangay ? `Barangay ${detectedBarangay}` : "Selected map location",
+        "Jaen",
+        "Nueva Ecija",
+      ]).join(", "),
       latitude,
       longitude,
     }));
@@ -1933,6 +2508,63 @@ const shouldShowIncidentMarkers =
   },
   [homepageBarangays, incidentDebugMode, isIncident]
 );
+
+  const openQuickIncidentReport = useCallback(async () => {
+    const latitude = toNumber(currentLocation?.latitude);
+    const longitude = toNumber(currentLocation?.longitude);
+
+    if (!isValidCoordinate(latitude, longitude)) {
+      Alert.alert("Location Unavailable", "Current navigation location is not available.");
+      return;
+    }
+
+    const point = { latitude, longitude };
+    const matchedBarangay =
+      homepageBarangays.find((barangay) => isPointInBarangay(point, barangay.feature)) ||
+      null;
+    let reversePlace = null;
+
+    if (Platform.OS !== "web") {
+      try {
+        const Location = await import("expo-location");
+        const matches = await Location.reverseGeocodeAsync({ latitude, longitude });
+        reversePlace = matches?.[0] || null;
+      } catch (err) {
+        console.log("Quick report reverse geocode failed:", err?.message);
+      }
+    }
+
+    const reverseBarangay = getReverseGeocodeBarangay(reversePlace);
+    const barangay = matchedBarangay
+      ? String(matchedBarangay.label || "").trim()
+      : reverseBarangay || "Unknown barangay";
+    const district = barangay ? getDistrictFromBarangay(barangay) || "Unknown district" : "Unknown district";
+    const road = getReverseGeocodeRoad(reversePlace);
+    const readableAddress = buildReadableNavigationAddress({
+      place: reversePlace,
+      barangay,
+      road,
+    });
+
+    setIncidentErrors({});
+    setIncidentImageError("");
+    setIncidentDraft((prev) => ({
+      ...prev,
+      type: "",
+      level: prev.level || "medium",
+      district,
+      barangay,
+      street: road,
+      location: readableAddress,
+      latitude,
+      longitude,
+      description: "",
+      usernames: user?.username || prev.usernames || "",
+      phone: user?.phone || prev.phone || "",
+    }));
+    setQuickReportVisible(true);
+  }, [currentLocation, homepageBarangays, user?.phone, user?.username]);
+
   const useCurrentIncidentLocation = useCallback(async () => {
     if (incidentLocating) return;
 
@@ -2010,14 +2642,43 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
     }
   }, [incidentDebugMode, incidentLocating]);
 
+  const applyIncidentImages = useCallback((nextImages, replace = false) => {
+    const currentImages = replace ? [] : getIncidentImageItems(incidentImage);
+    const mergedImages = [...currentImages, ...safeArray(nextImages)].slice(
+      0,
+      INCIDENT_IMAGE_LIMIT
+    );
+    const error = validateIncidentImages(mergedImages);
+
+    if (error) {
+      setIncidentImage(null);
+      setIncidentImageError(error);
+      return;
+    }
+
+    setIncidentImage(
+      mergedImages.length
+        ? { ...mergedImages[0], items: mergedImages }
+        : null
+    );
+    setIncidentImageError("");
+  }, [incidentImage]);
+
   const pickIncidentImage = useCallback(async () => {
     if (Platform.OS === "web") return;
 
     const ImagePicker = await import("expo-image-picker");
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (permission.status !== "granted") {
+      Alert.alert("Photo Permission Needed", "Allow photo access to upload incident images.");
+      return;
+    }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsMultipleSelection: true,
-      selectionLimit: 2,
+      selectionLimit: INCIDENT_IMAGE_LIMIT,
       quality: 0.7,
     });
 
@@ -2025,24 +2686,50 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
       return;
     }
 
-    const pickedImages = result.assets.slice(0, 2).map((asset, index) => {
-      const mimeType = asset.mimeType || "image/jpeg";
-      return {
-        uri: asset.uri,
-        name: asset.fileName || asset.uri.split("/").pop() || `incident-${index + 1}.jpg`,
-        type: mimeType,
-      };
-    });
+    const pickedImages = result.assets
+      .slice(0, INCIDENT_IMAGE_LIMIT)
+      .map(normalizeIncidentPickerAsset)
+      .filter(Boolean);
 
-    if (!pickedImages.every((item) => item.type.startsWith("image/"))) {
-      setIncidentImage(null);
-      setIncidentImageError("Please choose a valid image file.");
+    applyIncidentImages(pickedImages, true);
+  }, [applyIncidentImages]);
+
+  const takeIncidentPhoto = useCallback(async () => {
+    if (Platform.OS === "web") return;
+
+    const ImagePicker = await import("expo-image-picker");
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (permission.status !== "granted") {
+      Alert.alert("Camera Permission Needed", "Allow camera access to take incident photos.");
       return;
     }
 
-    setIncidentImage({ ...pickedImages[0], items: pickedImages });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.7,
+    });
+
+    if (result.canceled || !Array.isArray(result.assets) || !result.assets[0]?.uri) {
+      return;
+    }
+
+    const photo = normalizeIncidentPickerAsset(result.assets[0], 0);
+    applyIncidentImages(photo ? [photo] : [], false);
+  }, [applyIncidentImages]);
+
+  const removeIncidentImage = useCallback((uri) => {
+    const remainingImages = getIncidentImageItems(incidentImage).filter(
+      (item) => item.uri !== uri
+    );
+    setIncidentImage(
+      remainingImages.length
+        ? { ...remainingImages[0], items: remainingImages }
+        : null
+    );
     setIncidentImageError("");
-  }, []);
+  }, [incidentImage]);
   const submitIncident = useCallback(async () => {
   if (incidentBusy) return;
   const nextErrors = {};
@@ -2133,16 +2820,10 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
       uploadParameters[key] = value == null ? "" : String(value);
     });
 
-    const imagesToUpload = Array.isArray(incidentImage.items)
-      ? incidentImage.items
-      : [incidentImage];
-    const primaryImage = imagesToUpload.find((item) => item?.uri) || incidentImage;
+    const imagesToUpload = getIncidentImageItems(incidentImage);
+    const formData = buildIncidentFormData(uploadParameters, imagesToUpload);
 
-    await uploadSingleFile("/incident/register", primaryImage.uri, {
-      fieldName: "image",
-      mimeType: primaryImage.type || "image/jpeg",
-      parameters: uploadParameters,
-    });
+    await postMultipart("/incident/register", formData);
 
     const incidentsRes = await api.get("/incident/getIncidents");
     const freshIncidents = Array.isArray(incidentsRes?.data)
@@ -2158,6 +2839,8 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
     setIncidentErrors({});
     setIncidentImage(null);
     setIncidentImageError("");
+    setQuickReportVisible(false);
+    return true;
   } catch (err) {
     console.log("Incident submit failed:", {
       message: err?.message,
@@ -2165,10 +2848,16 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
       status: err?.response?.status,
     });
 
+    const errorCode = err?.response?.data?.code;
     Alert.alert(
-      "Submit Failed",
-      err?.response?.data?.message || err?.message || "Error submitting incident."
+      errorCode === "DUPLICATE_INCIDENT"
+        ? SIMILAR_INCIDENT_TITLE
+        : err?.response?.data?.title || "Submit Failed",
+      errorCode === "DUPLICATE_INCIDENT"
+        ? SIMILAR_INCIDENT_MESSAGE
+        : err?.response?.data?.message || err?.message || "Error submitting incident."
     );
+    return false;
   } finally {
     setIncidentBusy(false);
   }
@@ -2250,7 +2939,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
         showsUserLocation={false}
         showsMyLocationButton={false}
         toolbarEnabled={false}
-        customMapStyle={theme?.mapStyle || []}
+        customMapStyle={[]}
         scrollEnabled={!isBottomNavInteracting}
         zoomEnabled={!isBottomNavInteracting}
         rotateEnabled={panelState === "NAVIGATION" && !isBottomNavInteracting}
@@ -2277,9 +2966,9 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           <Polygon
             key={`home-brgy-glow-${barangay.id}`}
             coordinates={barangay.mainRing}
-            strokeColor="rgba(255,31,31,0.38)"
-            strokeWidth={7}
-            fillColor="rgba(255,31,31,0.04)"
+            strokeColor={`rgba(255,31,31,${heatPulseLevel})`}
+            strokeWidth={8}
+            fillColor={`rgba(255,31,31,${0.05 + heatPulseLevel * 0.08})`}
             tappable={false}
             zIndex={isSelected ? 27 : 17}
           />
@@ -2445,6 +3134,10 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
         </View>
       )}
 
+      {isEvac && isNavigating && routeHazardBanner && (
+        <RouteHazardAlertPanel alert={routeHazardBanner} />
+      )}
+
 
       {showMapWeather && (
         <View style={styles.mapWeatherOverlay} pointerEvents="box-none">
@@ -2454,6 +3147,8 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
 
       {activeModule && (
         <ModulePanel
+          theme={theme}
+          themedOverlay={themedOverlay}
           activeModule={activeModule}
           onBack={handleBack}
           incidentDraft={incidentDraft}
@@ -2462,6 +3157,8 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           incidentImageError={incidentImageError}
           incidentErrors={incidentErrors}
           pickIncidentImage={pickIncidentImage}
+          takeIncidentPhoto={takeIncidentPhoto}
+          removeIncidentImage={removeIncidentImage}
           selectedIncidentCoordinate={selectedIncidentCoordinate}
           useCurrentIncidentLocation={useCurrentIncidentLocation}
           incidentLocating={incidentLocating}
@@ -2513,6 +3210,10 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           resetNavigationCamera={resetNavigationCamera}
           exitNavigationMode={exitNavigationMode}
           navigationTopSummary={navigationTopSummary}
+          currentSpeedKmh={currentSpeedKmh}
+          openQuickIncidentReport={openQuickIncidentReport}
+          quickReportVisible={quickReportVisible}
+          setQuickReportVisible={setQuickReportVisible}
           showIncidentMarkers={showIncidentMarkers}
 setShowIncidentMarkers={setShowIncidentMarkers}
 showBarangayMarkers={showBarangayMarkers}
@@ -2526,6 +3227,8 @@ handleSelectBarangay={handleSelectBarangay}
 }
 
 function ModulePanel({
+  theme,
+  themedOverlay,
   activeModule,
   onBack,
   incidentDraft,
@@ -2534,6 +3237,8 @@ function ModulePanel({
   incidentImageError,
   incidentErrors,
   pickIncidentImage,
+  takeIncidentPhoto,
+  removeIncidentImage,
   selectedIncidentCoordinate,
   useCurrentIncidentLocation,
   incidentLocating,
@@ -2581,6 +3286,10 @@ function ModulePanel({
   resetNavigationCamera,
   exitNavigationMode,
   navigationTopSummary,
+  currentSpeedKmh,
+  openQuickIncidentReport,
+  quickReportVisible,
+  setQuickReportVisible,
     showIncidentMarkers,
   setShowIncidentMarkers,
   showBarangayMarkers,
@@ -2908,25 +3617,42 @@ function ModulePanel({
         {...(activeModule === "evac" && isNavigating ? panResponder.panHandlers : {})}
         style={[
           styles.panel,
+          themedOverlay.panel,
           activeModule === "evac" && isNavigating && styles.navigationPanelSurface,
+          activeModule === "evac" && isNavigating && themedOverlay.navigationPanel,
           { transform: [{ translateY }] },
         ]}
       >
         {activeModule === "evac" && isNavigating && (
-          <TouchableOpacity
-            style={styles.navigationRecenterButton}
-            activeOpacity={0.86}
-            onPress={recenterNavigationCamera}
-          >
-            <Ionicons
-              name={followMode ? "locate" : "locate-outline"}
-              size={23}
-              color="#14532D"
-            />
-          </TouchableOpacity>
+          <View style={styles.navigationFloatingControls} pointerEvents="box-none">
+            <TouchableOpacity
+              style={[
+                styles.navigationFloatingButton,
+                themedOverlay.floatingButton,
+                styles.navigationFloatingReportButton,
+              ]}
+              activeOpacity={0.88}
+              onPress={openQuickIncidentReport}
+            >
+              <Ionicons name="warning-outline" size={22} color="#7F1D1D" />
+              <Text style={styles.navigationFloatingReportText}>Report</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.navigationFloatingButton, themedOverlay.floatingButton]}
+              activeOpacity={0.86}
+              onPress={recenterNavigationCamera}
+            >
+              <Ionicons
+                name={followMode ? "locate" : "locate-outline"}
+                size={23}
+                color={theme.primary}
+              />
+            </TouchableOpacity>
+          </View>
         )}
         <View style={styles.dragZone} {...panResponder.panHandlers}>
-          <View style={styles.handle} />
+          <View style={[styles.handle, themedOverlay.handle]} />
         </View>
 {activeModule === "incident" && (
   <ScrollView
@@ -2935,6 +3661,8 @@ function ModulePanel({
     keyboardShouldPersistTaps="handled"
   >
     <PanelHeader
+      theme={theme}
+      themedOverlay={themedOverlay}
       title={selectedBarangay ? selectedBarangay.label : "Incident Reporting"}
       meta={
         selectedBarangay
@@ -2946,11 +3674,11 @@ function ModulePanel({
       onBack={onBack}
     />
 
-    <View style={styles.incidentToggleCard}>
+    <View style={[styles.incidentToggleCard, themedOverlay.card]}>
       <View style={styles.incidentToggleHeader}>
         <View>
-          <Text style={styles.incidentToggleEyebrow}>Incident workspace</Text>
-          <Text style={styles.incidentToggleTitle}>Choose what you want to do</Text>
+          <Text style={[styles.incidentToggleEyebrow, themedOverlay.subtext]}>Incident workspace</Text>
+          <Text style={[styles.incidentToggleTitle, themedOverlay.text]}>Choose what you want to do</Text>
         </View>
       </View>
 
@@ -2997,6 +3725,7 @@ function ModulePanel({
       activeOpacity={0.88}
       style={[
         styles.debugStatusCard,
+        themedOverlay.softCard,
         incidentDebugMode && styles.debugStatusCardActive,
       ]}
       onPress={() => setIncidentDebugMode((value) => !value)}
@@ -3009,6 +3738,7 @@ function ModulePanel({
       <Text
         style={[
           styles.debugStatusText,
+          themedOverlay.primaryText,
           incidentDebugMode && styles.debugStatusTextActive,
         ]}
       >
@@ -3027,14 +3757,14 @@ function ModulePanel({
 
     {incidentPanelTab === "report" && (
       <>
-        <View style={styles.panelSection}>
+        <View style={[styles.panelSection, themedOverlay.section]}>
           <View style={styles.incidentBarangayHeader}>
             <View style={styles.incidentBarangayIcon}>
               <Ionicons name="location-outline" size={17} color="#14532D" />
             </View>
             <View style={styles.incidentBarangayCopy}>
-              <Text style={styles.sectionLabel}>Location setup</Text>
-              <Text style={styles.panelNote}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Location setup</Text>
+              <Text style={[styles.panelNote, themedOverlay.subtext]}>
                 {selectedBarangay
                   ? "The selected barangay is already applied to this report."
                   : "Tap a barangay outline on the map or select a district and barangay below."}
@@ -3134,7 +3864,7 @@ function ModulePanel({
 
           <Text style={styles.locationStatusText}>
             {selectedIncidentCoordinate
-              ? `Map point set: ${selectedIncidentCoordinate.latitude.toFixed(5)}, ${selectedIncidentCoordinate.longitude.toFixed(5)}`
+              ? "Map point set for this report."
               : "No map point yet. Tap the map or use current location."}
           </Text>
           {!!incidentErrors?.location && <Text style={styles.validationText}>{incidentErrors.location}</Text>}
@@ -3168,21 +3898,39 @@ function ModulePanel({
           />
           {!!incidentErrors?.description && <Text style={styles.validationText}>{incidentErrors.description}</Text>}
 
-          <View style={styles.formRow}>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={pickIncidentImage}>
-              <Text style={styles.secondaryText}>
-                {incidentImage?.uri ? "Change photos" : "Add photos"}
-              </Text>
+          <View style={styles.photoActionRow}>
+            <TouchableOpacity style={styles.photoActionBtn} onPress={pickIncidentImage}>
+              <Ionicons name="images-outline" size={16} color="#14532D" />
+              <Text style={styles.photoActionText}>Upload Photo</Text>
             </TouchableOpacity>
-            {incidentImage?.uri &&
-              (incidentImage.items || [incidentImage]).slice(0, 2).map((item, index) => (
-                <Image
-                  key={`${item.uri}-${index}`}
-                  source={{ uri: item.uri }}
-                  style={styles.thumb}
-                />
-              ))}
+            <TouchableOpacity
+              style={[
+                styles.photoActionBtn,
+                getIncidentImageItems(incidentImage).length >= INCIDENT_IMAGE_LIMIT && styles.disabledBtn,
+              ]}
+              disabled={getIncidentImageItems(incidentImage).length >= INCIDENT_IMAGE_LIMIT}
+              onPress={takeIncidentPhoto}
+            >
+              <Ionicons name="camera-outline" size={16} color="#14532D" />
+              <Text style={styles.photoActionText}>Take Photo</Text>
+            </TouchableOpacity>
           </View>
+
+          {getIncidentImageItems(incidentImage).length > 0 && (
+            <View style={styles.photoPreviewRow}>
+              {getIncidentImageItems(incidentImage).map((item, index) => (
+                <View key={`${item.uri}-${index}`} style={styles.photoPreviewWrap}>
+                  <Image source={{ uri: item.uri }} style={styles.thumb} />
+                  <TouchableOpacity
+                    style={styles.photoRemoveBtn}
+                    onPress={() => removeIncidentImage(item.uri)}
+                  >
+                    <Ionicons name="close" size={13} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
 
           {!!(incidentImageError || incidentErrors?.image) && (
             <Text style={styles.validationText}>{incidentImageError || incidentErrors.image}</Text>
@@ -3270,21 +4018,23 @@ function ModulePanel({
         {activeModule === "flood" && (
           <ScrollView showsVerticalScrollIndicator={false}>
             <PanelHeader
+              theme={theme}
+              themedOverlay={themedOverlay}
               title="Flood Map"
               meta="Flood hazard overlay active"
               onBack={onBack}
             />
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Visible layers</Text>
+            <View style={[styles.panelSection, themedOverlay.section]}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Visible layers</Text>
               <LegendRow color="#065F46" label="Municipal boundary" />
-              <Text style={styles.panelNote}>
+              <Text style={[styles.panelNote, themedOverlay.subtext]}>
                 Flood layers are isolated from incidents and routes to keep the
                 hazard view readable.
               </Text>
             </View>
 
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Flood level legend</Text>
+            <View style={[styles.panelSection, themedOverlay.section]}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Flood level legend</Text>
               <View style={styles.floodLegendGrid}>
                 {FLOOD_LEGEND_ITEMS.map((item) => (
                   <View key={item.key} style={styles.floodLegendItem}>
@@ -3298,7 +4048,7 @@ function ModulePanel({
                   </View>
                 ))}
               </View>
-              <Text style={styles.panelNote}>
+              <Text style={[styles.panelNote, themedOverlay.subtext]}>
                 Legend colors match the current flood overlay palette used on the map.
               </Text>
             </View>
@@ -3308,15 +4058,17 @@ function ModulePanel({
         {activeModule === "earthquake" && (
           <>
             <PanelHeader
+              theme={theme}
+              themedOverlay={themedOverlay}
               title="Earthquake Map"
               meta="Earthquake hazard overlay active"
               onBack={onBack}
             />
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Risk overlay</Text>
+            <View style={[styles.panelSection, themedOverlay.section]}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Risk overlay</Text>
               <LegendRow color="#dc2626" label="High-risk earthquake zone" />
               <LegendRow color="#065F46" label="Municipal boundary" />
-              <Text style={styles.panelNote}>
+              <Text style={[styles.panelNote, themedOverlay.subtext]}>
                 Use this view for risk review. Route, report, and barangay
                 layers stay hidden unless their module is selected.
               </Text>
@@ -3327,21 +4079,23 @@ function ModulePanel({
         {activeModule === "barangay" && (
           <ScrollView showsVerticalScrollIndicator={false}>
             <PanelHeader
+              theme={theme}
+              themedOverlay={themedOverlay}
               title="Barangay Map"
               meta={`${barangayCount} barangay boundary records loaded`}
               onBack={onBack}
             />
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Administrative layers</Text>
+            <View style={[styles.panelSection, themedOverlay.section]}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Administrative layers</Text>
               <LegendRow color="#111827" label="Boundary lines" />
-              <Text style={styles.panelNote}>
+              <Text style={[styles.panelNote, themedOverlay.subtext]}>
                 Barangay boundaries are shown without incident or hazard clutter
                 for clearer local review.
               </Text>
             </View>
 
-            <View style={styles.panelSection}>
-              <Text style={styles.sectionLabel}>Barangay color legend</Text>
+            <View style={[styles.panelSection, themedOverlay.section]}>
+              <Text style={[styles.sectionLabel, themedOverlay.text]}>Barangay color legend</Text>
               <View style={styles.barangayLegendGrid}>
                 {barangayLegend.slice(0, 18).map((item, index) => (
                   <View key={`${item.label}-${index}`} style={styles.barangayLegendItem}>
@@ -3370,6 +4124,8 @@ function ModulePanel({
           <ScrollView showsVerticalScrollIndicator={false}>
             {!isNavigating && (
               <PanelHeader
+                theme={theme}
+                themedOverlay={themedOverlay}
                 title="Evac Place"
                 meta="Evacuation centers and dynamic pathfinding"
                 onBack={onBack}
@@ -3379,24 +4135,28 @@ function ModulePanel({
             {isNavigating && (
               <View style={styles.wazeBottomPanel}>
                 <View style={styles.wazeBottomStats}>
-                  <View style={[styles.wazeBottomStat, styles.wazeBottomStatPrimary]}>
-                    <Ionicons name="time-outline" size={16} color="#14532D" />
-                    <Text style={styles.wazeBottomValue}>{routeETA}</Text>
-                    <Text style={styles.wazeBottomLabel}>ETA</Text>
+                  <View style={[styles.wazeBottomStat, themedOverlay.card, styles.wazeBottomStatPrimary]}>
+                    <Ionicons name="time-outline" size={16} color={theme.primary} />
+                    <Text style={[styles.wazeBottomValue, themedOverlay.text]}>{routeETA}</Text>
+                    <Text style={[styles.wazeBottomLabel, themedOverlay.subtext]}>ETA</Text>
                   </View>
 
-                  <View style={styles.wazeBottomStat}>
-                    <Ionicons name="map-outline" size={16} color="#14532D" />
-                    <Text style={styles.wazeBottomValue}>{routeDistance}</Text>
-                    <Text style={styles.wazeBottomLabel}>How far</Text>
+                  <View style={[styles.wazeBottomStat, themedOverlay.card]}>
+                    <Ionicons name="map-outline" size={16} color={theme.primary} />
+                    <Text style={[styles.wazeBottomValue, themedOverlay.text]}>{routeDistance}</Text>
+                    <Text style={[styles.wazeBottomLabel, themedOverlay.subtext]}>How far</Text>
                   </View>
 
-                  <View style={styles.wazeBottomStat}>
-                    <Ionicons name={travelMode === "walking" ? "walk-outline" : travelMode === "cycling" ? "bicycle-outline" : "car-outline"} size={16} color="#14532D" />
-                    <Text style={styles.wazeBottomValue}>
-                      {navigationTopSummary.travelModeLabel}
+                  <View style={[styles.wazeBottomStat, themedOverlay.card]}>
+                    <Ionicons name={travelMode === "walking" ? "walk-outline" : travelMode === "cycling" ? "speedometer-outline" : "speedometer-outline"} size={16} color={theme.primary} />
+                    <Text style={[styles.wazeBottomValue, themedOverlay.text]}>
+                      {["driving", "cycling"].includes(travelMode)
+                        ? `${Math.max(0, Math.round(currentSpeedKmh || 0))} km/h`
+                        : navigationTopSummary.travelModeLabel}
                     </Text>
-                    <Text style={styles.wazeBottomLabel}>Mode</Text>
+                    <Text style={[styles.wazeBottomLabel, themedOverlay.subtext]}>
+                      {["driving", "cycling"].includes(travelMode) ? "Speed" : "Mode"}
+                    </Text>
                   </View>
                 </View>
 
@@ -3686,11 +4446,15 @@ function ModulePanel({
 
                         <View style={styles.navigationMetricBox}>
                           <Text style={styles.navigationMetricValue}>
-                            {routeSummary
-                              ? `${Math.max(1, Math.round(Number(routeSummary.km || 0) * 1300))}`
-                              : "--"}
+                            {["driving", "cycling"].includes(travelMode)
+                              ? `${Math.max(0, Math.round(currentSpeedKmh || 0))} km/h`
+                              : routeSummary
+                                ? `${Math.max(1, Math.round(Number(routeSummary.km || 0) * 1300))}`
+                                : "--"}
                           </Text>
-                          <Text style={styles.navigationMetricLabel}>Est. steps</Text>
+                          <Text style={styles.navigationMetricLabel}>
+                            {["driving", "cycling"].includes(travelMode) ? "Speed" : "Est. steps"}
+                          </Text>
                         </View>
 
                         <View style={styles.navigationMetricBox}>
@@ -3702,10 +4466,7 @@ function ModulePanel({
                       </View>
                     </View>
 
-                    <TouchableOpacity
-                      style={styles.dangerBtn}
-                      onPress={requestStopNavigation}
-                    >
+                    <TouchableOpacity style={styles.dangerBtn} onPress={requestStopNavigation}>
                       <Text style={styles.dangerText}>Stop navigation</Text>
                     </TouchableOpacity>
                   </>
@@ -3716,6 +4477,21 @@ function ModulePanel({
             )}
           </ScrollView>
         )}
+
+        <QuickIncidentReportModal
+          visible={quickReportVisible}
+          incidentDraft={incidentDraft}
+          setIncidentDraft={setIncidentDraft}
+          incidentImage={incidentImage}
+          incidentImageError={incidentImageError}
+          incidentErrors={incidentErrors}
+          pickIncidentImage={pickIncidentImage}
+          takeIncidentPhoto={takeIncidentPhoto}
+          removeIncidentImage={removeIncidentImage}
+          submitIncident={submitIncident}
+          incidentBusy={incidentBusy}
+          onClose={() => setQuickReportVisible(false)}
+        />
 
         <Modal
           visible={showStopConfirm}
@@ -3728,7 +4504,7 @@ function ModulePanel({
               <View style={styles.stopModalIcon}>
                 <Ionicons name="stop-circle-outline" size={28} color="#DC2626" />
               </View>
-              <Text style={styles.stopModalTitle}>Stop Navigation</Text>
+              <Text style={styles.stopModalTitle}>Stop Navigation?</Text>
               <Text style={styles.stopModalMessage}>
                 Do you want to stop navigation?
               </Text>
@@ -3747,7 +4523,7 @@ function ModulePanel({
                   activeOpacity={0.88}
                   onPress={performStopNavigation}
                 >
-                  <Text style={styles.stopModalYesText}>Yes</Text>
+                  <Text style={styles.stopModalYesText}>Yes, Stop</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -3758,17 +4534,155 @@ function ModulePanel({
   );
 }
 
-function PanelHeader({ title, meta, onBack }) {
+function PanelHeader({ title, meta, onBack, theme, themedOverlay }) {
   return (
     <View style={styles.panelHeader}>
-      <TouchableOpacity style={styles.panelBack} onPress={onBack}>
-        <Text style={styles.panelBackText}>Back</Text>
+      <TouchableOpacity style={[styles.panelBack, themedOverlay?.softCard]} onPress={onBack}>
+        <Text style={[styles.panelBackText, { color: theme?.primary || "#14532D" }]}>Back</Text>
       </TouchableOpacity>
       <View style={styles.panelTitleBlock}>
-        <Text style={styles.panelTitle}>{title}</Text>
-        <Text style={styles.panelMeta}>{meta}</Text>
+        <Text style={[styles.panelTitle, themedOverlay?.text]}>{title}</Text>
+        <Text style={[styles.panelMeta, themedOverlay?.subtext]}>{meta}</Text>
       </View>
     </View>
+  );
+}
+
+function QuickIncidentReportModal({
+  visible,
+  incidentDraft,
+  setIncidentDraft,
+  incidentImage,
+  incidentImageError,
+  incidentErrors,
+  pickIncidentImage,
+  takeIncidentPhoto,
+  removeIncidentImage,
+  submitIncident,
+  incidentBusy,
+  onClose,
+}) {
+  const imageItems = getIncidentImageItems(incidentImage);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.quickReportBackdrop}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.quickReportSheet}>
+          <View style={styles.quickReportHeader}>
+            <View>
+              <Text style={styles.quickReportTitle}>Report Incident</Text>
+              <Text style={styles.quickReportMeta} numberOfLines={1}>
+                {incidentDraft.location || "Jaen, Nueva Ecija"}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.quickReportClose} onPress={onClose}>
+              <Ionicons name="close" size={20} color="#10251B" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <View style={styles.quickReportLocationCard}>
+              <View style={styles.quickReportLocationIcon}>
+                <Ionicons name="location-outline" size={18} color="#14532D" />
+              </View>
+              <View style={styles.quickReportLocationCopy}>
+                <Text style={styles.quickReportLocationText} numberOfLines={2}>
+                  {incidentDraft.location || "Jaen, Nueva Ecija"}
+                </Text>
+                <Text style={styles.quickReportLocationMeta} numberOfLines={1}>
+                  {incidentDraft.barangay || "Unknown barangay"}
+                  {incidentDraft.street ? ` | ${incidentDraft.street}` : ""}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.label}>Incident Type</Text>
+            <Picker
+              selectedValue={incidentDraft.type}
+              style={styles.picker}
+              onValueChange={(value) =>
+                setIncidentDraft((prev) => ({ ...prev, type: value }))
+              }
+            >
+              <Picker.Item label="Choose category" value="" />
+              <Picker.Item label="Flood" value="flood" />
+              <Picker.Item label="Typhoon" value="typhoon" />
+              <Picker.Item label="Fire" value="fire" />
+              <Picker.Item label="Earthquake" value="earthquake" />
+            </Picker>
+            {!!incidentErrors?.type && <Text style={styles.validationText}>{incidentErrors.type}</Text>}
+
+            <Text style={styles.label}>Description</Text>
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              placeholder="Describe what you see"
+              multiline
+              value={incidentDraft.description}
+              onChangeText={(value) =>
+                setIncidentDraft((prev) => ({
+                  ...prev,
+                  description: sanitizeIncidentDescription(value),
+                }))
+              }
+              maxLength={INCIDENT_DESCRIPTION_MAX_LENGTH}
+            />
+            {!!incidentErrors?.description && (
+              <Text style={styles.validationText}>{incidentErrors.description}</Text>
+            )}
+
+            <View style={styles.photoActionRow}>
+              <TouchableOpacity style={styles.photoActionBtn} onPress={pickIncidentImage}>
+                <Ionicons name="images-outline" size={16} color="#14532D" />
+                <Text style={styles.photoActionText}>Upload Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.photoActionBtn,
+                  imageItems.length >= INCIDENT_IMAGE_LIMIT && styles.disabledBtn,
+                ]}
+                disabled={imageItems.length >= INCIDENT_IMAGE_LIMIT}
+                onPress={takeIncidentPhoto}
+              >
+                <Ionicons name="camera-outline" size={16} color="#14532D" />
+                <Text style={styles.photoActionText}>Take Photo</Text>
+              </TouchableOpacity>
+            </View>
+
+            {imageItems.length > 0 && (
+              <View style={styles.photoPreviewRow}>
+                {imageItems.map((item, index) => (
+                  <View key={`${item.uri}-${index}`} style={styles.photoPreviewWrap}>
+                    <Image source={{ uri: item.uri }} style={styles.thumb} />
+                    <TouchableOpacity
+                      style={styles.photoRemoveBtn}
+                      onPress={() => removeIncidentImage(item.uri)}
+                    >
+                      <Ionicons name="close" size={13} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+            {!!(incidentImageError || incidentErrors?.image) && (
+              <Text style={styles.validationText}>{incidentImageError || incidentErrors.image}</Text>
+            )}
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, incidentBusy && styles.disabledBtn]}
+              disabled={incidentBusy}
+              onPress={submitIncident}
+            >
+              <Text style={styles.primaryText}>
+                {incidentBusy ? "Submitting..." : "Submit report"}
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -3780,6 +4694,48 @@ function LegendRow({ color, label }) {
     </View>
   );
 }
+
+function createMapOverlayThemeStyles(theme) {
+  return StyleSheet.create({
+    panel: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    navigationPanel: {
+      backgroundColor: theme.panel,
+      borderColor: theme.border,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softCard: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    section: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    floatingButton: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    handle: {
+      backgroundColor: theme.border,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+    primaryText: {
+      color: theme.primary,
+    },
+  });
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -3860,13 +4816,84 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
 
-  navigationRecenterButton: {
+  routeHazardBanner: {
     position: "absolute",
+    top: Platform.OS === "ios" ? 112 : 88,
+    left: 16,
     right: 16,
-    top: -68,
+    minHeight: 66,
+    borderRadius: 20,
+    backgroundColor: "rgba(194,65,12,0.97)",
+    borderWidth: 1,
+    borderColor: "rgba(254,215,170,0.72)",
+    zIndex: 2550,
+    elevation: 2550,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
+    shadowColor: "#450A0A",
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+  },
+
+  routeHazardBannerUrgent: {
+    backgroundColor: "rgba(127,29,29,0.98)",
+    borderColor: "rgba(254,202,202,0.78)",
+  },
+
+  routeHazardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 15,
+    backgroundColor: "#EA580C",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  routeHazardIconUrgent: {
+    backgroundColor: "#DC2626",
+  },
+
+  routeHazardCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  routeHazardText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "900",
+  },
+
+  routeHazardDistance: {
+    marginTop: 3,
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+
+  navigationFloatingControls: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    top: -74,
+    minHeight: 58,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    zIndex: 12,
+    elevation: 12,
+  },
+
+  navigationFloatingButton: {
     width: 56,
     height: 56,
-    borderRadius: 22,
+    borderRadius: 20,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#DDE9E3",
@@ -3877,6 +4904,21 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 5 },
     elevation: 8,
+  },
+
+  navigationFloatingReportButton: {
+    width: 118,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    gap: 8,
+    backgroundColor: "#FFF7F7",
+    borderColor: "#FECACA",
+  },
+
+  navigationFloatingReportText: {
+    color: "#7F1D1D",
+    fontSize: 14,
+    fontWeight: "900",
   },
 
   navigationArrowShell: {
@@ -4188,7 +5230,7 @@ const styles = StyleSheet.create({
   wazeStopBtn: {
     marginTop: 14,
     minHeight: 56,
-    borderRadius: 20,
+    borderRadius: 18,
     backgroundColor: "#D92D20",
     alignItems: "center",
     justifyContent: "center",
@@ -4208,19 +5250,19 @@ const styles = StyleSheet.create({
   },
 
   wazeBottomPanel: {
-    paddingTop: 4,
-    paddingBottom: 2,
+    paddingTop: 2,
+    paddingBottom: 4,
   },
 
   wazeBottomStats: {
     flexDirection: "row",
-    gap: 10,
+    gap: 9,
   },
 
   wazeBottomStat: {
     flex: 1,
-    minHeight: 82,
-    borderRadius: 20,
+    minHeight: 78,
+    borderRadius: 18,
     backgroundColor: "#FAFCFB",
     borderWidth: 1,
     borderColor: "#DDE9E3",
@@ -4229,9 +5271,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 9,
     shadowColor: "#0f2319",
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
 
@@ -4243,7 +5285,7 @@ const styles = StyleSheet.create({
   wazeBottomValue: {
     marginTop: 4,
     color: "#10251B",
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: "900",
     textAlign: "center",
   },
@@ -4373,36 +5415,36 @@ const styles = StyleSheet.create({
   navigationPanelSurface: {
     height: NAV_PANEL_HEIGHT,
     maxHeight: NAV_PANEL_HEIGHT,
-    backgroundColor: "rgba(255,255,255,0.98)",
-    borderColor: "rgba(221,233,227,0.95)",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    backgroundColor: "rgba(255,255,255,0.985)",
+    borderColor: "rgba(210,226,218,0.98)",
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     paddingTop: 0,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingBottom: 18,
     overflow: "visible",
     shadowColor: "#0f2319",
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    elevation: 18,
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 20,
   },
 
   dragZone: {
-    minHeight: 58,
+    minHeight: 46,
     alignItems: "center",
     justifyContent: "center",
     marginHorizontal: -18,
-    marginBottom: 2,
+    marginBottom: 4,
   },
 
   handle: {
-    width: 86,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#8EA69A",
+    width: 62,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: "#9CB4A8",
     alignSelf: "center",
   },
 
@@ -4466,6 +5508,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#fbfdfc",
     marginBottom: 10,
     fontSize: 14,
+  },
+
+  label: {
+    marginBottom: 6,
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "800",
   },
 
   textArea: {
@@ -4560,11 +5609,62 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
+  photoActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  photoActionBtn: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: "#F8FBF9",
+    borderWidth: 1,
+    borderColor: "#DCE7E1",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+    paddingHorizontal: 8,
+  },
+
+  photoActionText: {
+    color: "#14532D",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  photoPreviewRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  photoPreviewWrap: {
+    width: 56,
+    height: 56,
+  },
+
   thumb: {
-    width: 48,
-    height: 48,
+    width: 56,
+    height: 56,
     borderRadius: 8,
     backgroundColor: "#e5e7eb",
+  },
+
+  photoRemoveBtn: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#FFFFFF",
   },
 
   validationText: {
@@ -4572,6 +5672,97 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     color: "#b91c1c",
     fontSize: 12,
+    fontWeight: "800",
+  },
+
+  quickReportBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(15,23,42,0.42)",
+  },
+
+  quickReportSheet: {
+    maxHeight: Math.min(SCREEN_HEIGHT * 0.78, 620),
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#DDE9E3",
+  },
+
+  quickReportHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+  },
+
+  quickReportTitle: {
+    color: "#10251B",
+    fontSize: 19,
+    fontWeight: "900",
+  },
+
+  quickReportMeta: {
+    marginTop: 3,
+    color: "#647067",
+    fontSize: 12,
+    fontWeight: "700",
+    maxWidth: 280,
+  },
+
+  quickReportClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: "#F4FAF6",
+    borderWidth: 1,
+    borderColor: "#DCE7E1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  quickReportLocationCard: {
+    marginBottom: 14,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: "#F8FBF9",
+    borderWidth: 1,
+    borderColor: "#DCE7E1",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+
+  quickReportLocationIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: "#EAF7EF",
+    borderWidth: 1,
+    borderColor: "#CFE5D4",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  quickReportLocationCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  quickReportLocationText: {
+    color: "#10251B",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+
+  quickReportLocationMeta: {
+    marginTop: 4,
+    color: "#647067",
+    fontSize: 11,
     fontWeight: "800",
   },
 

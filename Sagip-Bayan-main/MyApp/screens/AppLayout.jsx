@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useMemo, useState } from "react";
 import {
   View,
   StyleSheet,
@@ -14,13 +14,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { UserContext } from "./UserContext";
 import { MapContext } from "./contexts/MapContext";
 import { NotificationContext } from "./contexts/NotificationContext";
+import { ThemeContext } from "./contexts/ThemeContext";
 import { useSearch } from "./SearchContext";
 
 import AppTopBar from "./components/AppTopBar";
 import AppDrawer from "./components/AppDrawer";
 import LogoutModal from "./components/LogoutModal";
 import { safeDisplayText } from "./utils/validation";
-import api from "../lib/api";
 
 const MAP_UI_SCREENS = new Set(["Map", "Connection"]);
 
@@ -32,6 +32,14 @@ export default function AppLayout({
 }) {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
+  const { theme } = useContext(ThemeContext);
+  const themed = useMemo(
+    () => ({
+      root: { backgroundColor: theme.background },
+      androidNavBackdrop: { backgroundColor: theme.background },
+    }),
+    [theme]
+  );
 
   const { setUser } = useContext(UserContext);
   const {
@@ -58,9 +66,6 @@ export default function AppLayout({
 
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [debugBusy, setDebugBusy] = useState(false);
-  const [debugResult, setDebugResult] = useState(null);
 
   const isTopUiAllowedScreen = MAP_UI_SCREENS.has(currentScreen);
 
@@ -89,57 +94,13 @@ export default function AppLayout({
     setActiveRoute(null);
   };
 
-  const runDebugCheck = async () => {
-    setDebugOpen(true);
-    setDebugBusy(true);
-    setDebugResult(null);
-
-    try {
-      const [health, diagnostics, incidents, evacs, guidelines] = await Promise.all([
-        api.get("/health"),
-        api.get("/api/mobile-debug"),
-        api.get("/incident/getIncidents"),
-        api.get("/evacs"),
-        api.get("/api/guidelines"),
-      ]);
-
-      setDebugResult({
-        ok: true,
-        lines: [
-          health?.data?.ok ? "Connected to server" : "Backend responded unexpectedly",
-          diagnostics?.data?.message || "API status returned",
-          Array.isArray(incidents.data)
-            ? incidents.data.length
-              ? `Data fetching ok: ${incidents.data.length} accepted incidents`
-              : "API returned no data for accepted incidents"
-            : "Incident API returned unexpected data",
-          Array.isArray(evacs.data)
-            ? `Evacuation centers loaded: ${evacs.data.length}`
-            : "Evacuation API returned unexpected data",
-          Array.isArray(guidelines.data)
-            ? `Published MDRRMO posts loaded: ${guidelines.data.length}`
-            : "Guideline API returned unexpected data",
-          "Notification token registration endpoint is available at /user/:id/notification-token",
-        ],
-      });
-    } catch (err) {
-      setDebugResult({
-        ok: false,
-        lines: [
-          "Failed to connect",
-          err?.response?.data?.message || err?.message || "Unknown connection error",
-        ],
-      });
-    } finally {
-      setDebugBusy(false);
-    }
-  };
-
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, themed.root]}>
       <View style={styles.content}>{children}</View>
 
-      {Platform.OS === "android" && <View pointerEvents="none" style={styles.androidNavBackdrop} />}
+      {Platform.OS === "android" && (
+        <View pointerEvents="none" style={[styles.androidNavBackdrop, themed.androidNavBackdrop]} />
+      )}
 
       {showSearchBar && (
         <AppTopBar
@@ -169,7 +130,32 @@ export default function AppLayout({
           onClear={clearNotifications}
           onResolveJoinRequest={resolveJoinRequest}
           onRefresh={refreshNotifications}
+          theme={theme}
           onOpenNotification={(item) => {
+            if (isGuidelineNotification(item)) {
+              setNotificationsOpen(false);
+              navigation.navigate("AppShell", {
+                screen: "Guidelines",
+                params: {
+                  guidelineId: item?.guidelineId || null,
+                  notificationId: item?.id || null,
+                },
+              });
+              return true;
+            }
+
+            if (isAnnouncementNotification(item)) {
+              setNotificationsOpen(false);
+              navigation.navigate("AppShell", {
+                screen: "Announcement",
+                params: {
+                  announcementId: item?.announcementId || null,
+                  notificationId: item?.id || null,
+                },
+              });
+              return true;
+            }
+
             if (!isJoinRequestNotification(item)) return false;
 
             setNotificationsOpen(false);
@@ -186,19 +172,6 @@ export default function AppLayout({
           }}
         />
       )}
-
-      {showSearchBar && (
-        <TouchableOpacity style={styles.debugFab} onPress={runDebugCheck}>
-          <Ionicons name="bug-outline" size={18} color="#FFFFFF" />
-        </TouchableOpacity>
-      )}
-
-      <DebugModal
-        visible={debugOpen}
-        busy={debugBusy}
-        result={debugResult}
-        onClose={() => setDebugOpen(false)}
-      />
 
       {drawerOpen && (
         <AppDrawer
@@ -233,55 +206,24 @@ export default function AppLayout({
   );
 }
 
-function DebugModal({ visible, busy, result, onClose }) {
-  if (!visible) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.notificationModalBackdrop}>
-        <View style={styles.notificationModalCard}>
-          <View style={styles.notificationModalHeader}>
-            <View style={styles.notificationModalIcon}>
-              <Ionicons name="bug-outline" size={20} color="#14532D" />
-            </View>
-            <TouchableOpacity style={styles.notificationModalClose} onPress={onClose}>
-              <Ionicons name="close" size={18} color="#334155" />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.notificationModalTitle}>Connection debug</Text>
-          <Text style={styles.notificationModalMessage}>
-            {busy ? "Checking backend, API data, and notification registration path..." : ""}
-          </Text>
-          {result?.lines?.map((line, index) => (
-            <Text
-              key={`${line}-${index}`}
-              style={[
-                styles.debugLine,
-                result.ok ? styles.debugLineOk : styles.debugLineError,
-              ]}
-            >
-              {line}
-            </Text>
-          ))}
-          <TouchableOpacity style={styles.notificationModalDone} onPress={onClose}>
-            <Text style={styles.notificationModalDoneText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function NotificationFeed({
   notifications,
   onClose,
   onClear,
   onResolveJoinRequest,
   onRefresh,
+  theme,
   onOpenNotification,
 }) {
   const [busyNotificationId, setBusyNotificationId] = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
+
+  useEffect(() => {
+    console.log(
+      "[notifications] rendered ids",
+      notifications.map((item) => item.id)
+    );
+  }, [notifications]);
 
   const handleResolve = async (notification, action) => {
     if (!notification?.id || busyNotificationId) return;
@@ -307,23 +249,38 @@ function NotificationFeed({
   };
 
   return (
-    <View style={styles.notificationPanel}>
+    <View
+      style={[
+        styles.notificationPanel,
+        { backgroundColor: theme.elevated, borderColor: theme.border },
+      ]}
+    >
       <View style={styles.notificationHeader}>
         <View>
-          <Text style={styles.notificationTitle}>Notifications</Text>
-          <Text style={styles.notificationSubtitle}>Connection and safety updates</Text>
+          <Text style={[styles.notificationTitle, { color: theme.text }]}>Notifications</Text>
+          <Text style={[styles.notificationSubtitle, { color: theme.mutedText }]}>
+            Connection and safety updates
+          </Text>
         </View>
-        <TouchableOpacity style={styles.notificationClose} onPress={onClose}>
-          <Ionicons name="close" size={18} color="#334155" />
+        <TouchableOpacity
+          style={[
+            styles.notificationClose,
+            { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+          ]}
+          onPress={onClose}
+        >
+          <Ionicons name="close" size={18} color={theme.text} />
         </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={styles.notificationList}>
         {notifications.length === 0 ? (
           <View style={styles.emptyNotification}>
-            <Ionicons name="notifications-outline" size={24} color="#94A3B8" />
-            <Text style={styles.emptyNotificationTitle}>No updates yet</Text>
-            <Text style={styles.emptyNotificationText}>
+            <Ionicons name="notifications-outline" size={24} color={theme.mutedText} />
+            <Text style={[styles.emptyNotificationTitle, { color: theme.text }]}>
+              No updates yet
+            </Text>
+            <Text style={[styles.emptyNotificationText, { color: theme.mutedText }]}>
               Connection joins, removals, and safe/not-safe updates will appear here.
             </Text>
           </View>
@@ -338,15 +295,20 @@ function NotificationFeed({
                 onPress={() => handleNotificationPress(item)}
               style={[
                 styles.notificationItem,
+                { borderTopColor: theme.border },
                 showRequestActions && styles.notificationItemActionable,
+                showRequestActions && {
+                  backgroundColor: theme.surfaceAlt,
+                  borderColor: theme.border,
+                },
               ]}
             >
-              <View style={styles.notificationIcon}>
-                <Ionicons name={safeNotificationIcon(item?.icon)} size={17} color="#14532D" />
+              <View style={[styles.notificationIcon, { backgroundColor: theme.primarySoft }]}>
+                <Ionicons name={safeNotificationIcon(item?.icon)} size={17} color={theme.primary} />
               </View>
               <View style={styles.notificationCopy}>
                 <View style={styles.notificationTitleRow}>
-                  <Text style={styles.notificationItemTitle}>
+                  <Text style={[styles.notificationItemTitle, { color: theme.text }]}>
                     {safeDisplayText(item?.title, "Notification")}
                   </Text>
                   {item.sourceLabel && (
@@ -367,22 +329,26 @@ function NotificationFeed({
                     </View>
                   )}
                 </View>
-                <Text style={styles.notificationMessage}>
+                <Text style={[styles.notificationMessage, { color: theme.mutedText }]}>
                   {safeDisplayText(item?.message, "There is a new safety update.")}
                 </Text>
                 {!!item.actorName && (
-                  <Text style={styles.notificationMeta}>
+                  <Text style={[styles.notificationMeta, { color: theme.mutedText }]}>
                     {safeDisplayText(item.actorName, "Requester")}
                     {item.actorUsername ? ` • @${item.actorUsername}` : ""}
                     {item.connectionCode ? ` • ${item.connectionCode}` : ""}
                   </Text>
                 )}
                 <View style={styles.notificationFooter}>
-                  <Text style={styles.notificationTime}>
+                  <Text style={[styles.notificationTime, { color: theme.mutedText }]}>
                     {formatNotificationTime(item.createdAt)}
                   </Text>
-                  <Text style={styles.notificationOpenHint}>
-                    {showRequestActions ? "Open in connection" : "Tap to view"}
+                  <Text style={[styles.notificationOpenHint, { color: theme.primary }]}>
+                    {showRequestActions
+                      ? "Open in connection"
+                      : isGuidelineNotification(item)
+                        ? "Open guideline"
+                        : "Tap to view"}
                   </Text>
                 </View>
               </View>
@@ -393,8 +359,14 @@ function NotificationFeed({
       </ScrollView>
 
       {notifications.length > 0 && (
-        <TouchableOpacity style={styles.clearNotifications} onPress={onClear}>
-          <Text style={styles.clearNotificationsText}>Clear all</Text>
+        <TouchableOpacity
+          style={[
+            styles.clearNotifications,
+            { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+          ]}
+          onPress={onClear}
+        >
+          <Text style={[styles.clearNotificationsText, { color: theme.text }]}>Clear all</Text>
         </TouchableOpacity>
       )}
 
@@ -402,6 +374,7 @@ function NotificationFeed({
         notification={selectedNotification}
         visible={Boolean(selectedNotification)}
         busy={busyNotificationId === selectedNotification?.id}
+        theme={theme}
         onClose={() => setSelectedNotification(null)}
         onResolve={handleResolve}
       />
@@ -409,7 +382,7 @@ function NotificationFeed({
   );
 }
 
-function NotificationDetailModal({ notification, visible, busy, onClose, onResolve }) {
+function NotificationDetailModal({ notification, visible, busy, theme, onClose, onResolve }) {
   if (!visible || !notification) {
     return null;
   }
@@ -418,36 +391,54 @@ function NotificationDetailModal({ notification, visible, busy, onClose, onResol
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.notificationModalBackdrop}>
-        <View style={styles.notificationModalCard}>
+      <View style={[styles.notificationModalBackdrop, { backgroundColor: theme.overlay }]}>
+        <View
+          style={[
+            styles.notificationModalCard,
+            { backgroundColor: theme.modalBackground, borderColor: theme.border },
+          ]}
+        >
           <View style={styles.notificationModalHeader}>
-            <View style={styles.notificationModalIcon}>
+            <View style={[styles.notificationModalIcon, { backgroundColor: theme.primarySoft }]}>
               <Ionicons
                 name={safeNotificationIcon(notification?.icon)}
                 size={20}
-                color="#14532D"
+                color={theme.primary}
               />
             </View>
-            <TouchableOpacity style={styles.notificationModalClose} onPress={onClose}>
-              <Ionicons name="close" size={18} color="#334155" />
+            <TouchableOpacity
+              style={[
+                styles.notificationModalClose,
+                { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+              ]}
+              onPress={onClose}
+            >
+              <Ionicons name="close" size={18} color={theme.text} />
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.notificationModalTitle}>
+          <Text style={[styles.notificationModalTitle, { color: theme.text }]}>
             {safeDisplayText(notification?.title, "Notification")}
           </Text>
-          <Text style={styles.notificationModalMessage}>
+          <Text style={[styles.notificationModalMessage, { color: theme.mutedText }]}>
             {safeDisplayText(notification?.message, "There is a new safety update.")}
           </Text>
 
           {!!notification?.actorName && (
-            <View style={styles.notificationDetailBlock}>
-              <Text style={styles.notificationDetailLabel}>Requester</Text>
-              <Text style={styles.notificationDetailValue}>
+            <View
+              style={[
+                styles.notificationDetailBlock,
+                { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+              ]}
+            >
+              <Text style={[styles.notificationDetailLabel, { color: theme.mutedText }]}>
+                Requester
+              </Text>
+              <Text style={[styles.notificationDetailValue, { color: theme.text }]}>
                 {safeDisplayText(notification?.actorName, "Requester")}
               </Text>
               {!!notification?.actorUsername && (
-                <Text style={styles.notificationDetailSubvalue}>
+                <Text style={[styles.notificationDetailSubvalue, { color: theme.mutedText }]}>
                   @{safeDisplayText(notification?.actorUsername, "unknown")}
                 </Text>
               )}
@@ -455,17 +446,31 @@ function NotificationDetailModal({ notification, visible, busy, onClose, onResol
           )}
 
           {!!notification?.connectionCode && (
-            <View style={styles.notificationDetailBlock}>
-              <Text style={styles.notificationDetailLabel}>Connection Code</Text>
-              <Text style={styles.notificationDetailValue}>
+            <View
+              style={[
+                styles.notificationDetailBlock,
+                { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+              ]}
+            >
+              <Text style={[styles.notificationDetailLabel, { color: theme.mutedText }]}>
+                Connection Code
+              </Text>
+              <Text style={[styles.notificationDetailValue, { color: theme.text }]}>
                 {safeDisplayText(notification?.connectionCode, "Unavailable")}
               </Text>
             </View>
           )}
 
-          <View style={styles.notificationDetailBlock}>
-            <Text style={styles.notificationDetailLabel}>Received</Text>
-            <Text style={styles.notificationDetailValue}>
+          <View
+            style={[
+              styles.notificationDetailBlock,
+              { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+            ]}
+          >
+            <Text style={[styles.notificationDetailLabel, { color: theme.mutedText }]}>
+              Received
+            </Text>
+            <Text style={[styles.notificationDetailValue, { color: theme.text }]}>
               {formatNotificationTime(notification?.createdAt)}
             </Text>
           </View>
@@ -490,8 +495,14 @@ function NotificationDetailModal({ notification, visible, busy, onClose, onResol
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity style={styles.notificationModalDone} onPress={onClose}>
-              <Text style={styles.notificationModalDoneText}>Close</Text>
+            <TouchableOpacity
+              style={[
+                styles.notificationModalDone,
+                { backgroundColor: theme.surfaceAlt, borderColor: theme.border },
+              ]}
+              onPress={onClose}
+            >
+              <Text style={[styles.notificationModalDoneText, { color: theme.text }]}>Close</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -514,6 +525,17 @@ function isJoinRequestNotification(item) {
       Boolean(item?.actorUserId) &&
       !item?.handledAt)
   );
+}
+
+function isGuidelineNotification(item) {
+  const type = String(item?.type || "").toLowerCase();
+  return ["guideline", "drrmo_guideline"].includes(type) && Boolean(item?.guidelineId);
+}
+
+function isAnnouncementNotification(item) {
+  const type = String(item?.type || "").toLowerCase();
+  return ["announcement", "mdrrmo_announcement", "drrmo_announcement"].includes(type) &&
+    Boolean(item?.announcementId);
 }
 
 function formatNotificationTime(date) {
@@ -630,36 +652,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
-  },
-
-  debugFab: {
-    position: "absolute",
-    top: 104,
-    right: 18,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#14532D",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 6600,
-    elevation: 6600,
-  },
-
-  debugLine: {
-    alignSelf: "stretch",
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: "700",
-  },
-
-  debugLineOk: {
-    color: "#166534",
-  },
-
-  debugLineError: {
-    color: "#991B1B",
   },
 
   notificationHeader: {

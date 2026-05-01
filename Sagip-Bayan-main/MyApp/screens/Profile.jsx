@@ -1,5 +1,5 @@
 // screens/Profile.jsx
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Ionicons } from "@expo/vector-icons";
 
 import { UserContext } from "./UserContext";
+import { useTheme } from "./contexts/ThemeContext";
 import api, { getApiBaseUrl } from "../lib/api";
 import { safeDisplayText } from "./utils/validation";
 
@@ -23,6 +24,8 @@ const DEFAULT_AVATAR =
 
 export default function Profile({ navigation }) {
   const { user, setUser } = useContext(UserContext);
+  const { theme } = useTheme();
+  const themed = useMemo(() => createProfileThemeStyles(theme), [theme]);
   const [avatarUri, setAvatarUri] = useState(null);
   const [uploading, setUploading] = useState(false);
 
@@ -126,22 +129,22 @@ export default function Profile({ navigation }) {
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, themed.screen]}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <TouchableOpacity style={styles.headerIcon} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={22} color="#123524" />
+        <TouchableOpacity style={[styles.headerIcon, themed.card]} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={theme.primary} />
         </TouchableOpacity>
 
         <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Account</Text>
-          <Text style={styles.headerSubtitle}>Profile and safety identity</Text>
+          <Text style={[styles.headerTitle, themed.text]}>Account</Text>
+          <Text style={[styles.headerSubtitle, themed.subtext]}>Profile and safety identity</Text>
         </View>
 
-        <View style={styles.headerIconGhost}>
-          <Ionicons name="shield-checkmark-outline" size={21} color="#166534" />
+        <View style={[styles.headerIconGhost, themed.softIcon]}>
+          <Ionicons name="shield-checkmark-outline" size={21} color={theme.primary} />
         </View>
       </View>
 
@@ -231,9 +234,10 @@ export default function Profile({ navigation }) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Manage account</Text>
+        <Text style={[styles.sectionTitle, themed.text]}>Manage account</Text>
 
         <ActionRow
+          theme={theme}
           icon="person-outline"
           title="Personal Details"
           subtitle="Name, username, phone and email"
@@ -241,6 +245,7 @@ export default function Profile({ navigation }) {
         />
 
         <ActionRow
+          theme={theme}
           icon="lock-closed-outline"
           title="Password & Security"
           subtitle="Password rules and two-factor settings"
@@ -270,19 +275,26 @@ export default function Profile({ navigation }) {
   );
 }
 
-function ActionRow({ icon, title, subtitle, onPress }) {
+function ActionRow({ icon, title, subtitle, onPress, theme }) {
   return (
-    <TouchableOpacity style={styles.actionRow} onPress={onPress} activeOpacity={0.84}>
-      <View style={styles.actionIcon}>
-        <Ionicons name={icon} size={20} color="#14532D" />
+    <TouchableOpacity
+      style={[
+        styles.actionRow,
+        { backgroundColor: theme.card, borderColor: theme.border },
+      ]}
+      onPress={onPress}
+      activeOpacity={0.84}
+    >
+      <View style={[styles.actionIcon, { backgroundColor: theme.primarySoft }]}>
+        <Ionicons name={icon} size={20} color={theme.primary} />
       </View>
 
       <View style={styles.actionCopy}>
-        <Text style={styles.actionTitle}>{title}</Text>
-        <Text style={styles.actionSubtitle}>{subtitle}</Text>
+        <Text style={[styles.actionTitle, { color: theme.text }]}>{title}</Text>
+        <Text style={[styles.actionSubtitle, { color: theme.subtext }]}>{subtitle}</Text>
       </View>
 
-      <Ionicons name="chevron-forward" size={19} color="#94A3B8" />
+      <Ionicons name="chevron-forward" size={19} color={theme.subtext} />
     </TouchableOpacity>
   );
 }
@@ -564,3 +576,24 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 });
+
+function createProfileThemeStyles(theme) {
+  return StyleSheet.create({
+    screen: {
+      backgroundColor: theme.background,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softIcon: {
+      backgroundColor: theme.primarySoft,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+  });
+}

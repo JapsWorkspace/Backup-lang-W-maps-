@@ -13,6 +13,7 @@ import { FlatList } from "react-native-gesture-handler";
 
 import styles from "../Designs/NewBottomNav";
 import { MapContext } from "./contexts/MapContext";
+import { useTheme } from "./contexts/ThemeContext";
 
 const MODULES = [
   {
@@ -50,7 +51,8 @@ const MODULES = [
 const NAV_REVEAL_PANEL_Y = 280;
 const ITEM_WIDTH = 156;
 
-function DockCard({ item, index, total, isActive, onPress }) {
+function DockCard({ item, index, total, isActive, onPress, theme }) {
+  const isDark = theme.mode === "dark";
   const activeAnim = useRef(new Animated.Value(isActive ? 1 : 0)).current;
   const pressAnim = useRef(new Animated.Value(0)).current;
 
@@ -110,35 +112,35 @@ function DockCard({ item, index, total, isActive, onPress }) {
 
   const backgroundColor = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["rgba(255,255,255,0.93)", "#14532d"],
+    outputRange: [isDark ? "rgba(18,28,24,0.96)" : theme.card, theme.buttonPrimary],
   });
 
   const borderColor = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["rgba(255,255,255,0.72)", "#14532d"],
+    outputRange: [isDark ? "rgba(134,239,172,0.46)" : theme.border, theme.buttonPrimary],
   });
 
   const iconBg = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["#e7f5ed", "rgba(255,255,255,0.18)"],
+    outputRange: [isDark ? "rgba(134,239,172,0.16)" : theme.primarySoft, theme.panel],
   });
 
   const iconBorder = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["#d7eadf", "rgba(255,255,255,0.28)"],
+    outputRange: [isDark ? "rgba(134,239,172,0.36)" : theme.border, theme.border],
   });
 
   const labelColor = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["#10251b", "#ffffff"],
+    outputRange: [isDark ? "#F8FFF9" : theme.text, theme.buttonText],
   });
 
   const helperColor = activeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["#5f6f66", "rgba(255,255,255,0.82)"],
+    outputRange: [isDark ? "#D7E8DC" : theme.subtext, theme.buttonText],
   });
 
-  const iconColor = isActive ? "#ffffff" : "#14532d";
+  const iconColor = isActive ? theme.primary : isDark ? "#F8FFF9" : theme.primary;
 
   return (
     <Pressable
@@ -203,6 +205,7 @@ function DockCard({ item, index, total, isActive, onPress }) {
 }
 
 export default function NewBottomNav() {
+  const { theme } = useTheme();
   const {
     activeMapModule,
     setActiveMapModule,
@@ -348,6 +351,7 @@ export default function NewBottomNav() {
       total={moduleData.length}
       isActive={activeDockItem === item.key}
       onPress={() => openModule(item.key, index)}
+      theme={theme}
     />
   );
 
@@ -383,6 +387,10 @@ export default function NewBottomNav() {
               disabled={focusedIndex <= 0}
               style={({ pressed }) => [
                 localStyles.arrowButton,
+                {
+                  backgroundColor: theme.mode === "dark" ? "rgba(18,28,24,0.96)" : theme.card,
+                  borderColor: theme.mode === "dark" ? "rgba(134,239,172,0.42)" : theme.border,
+                },
                 focusedIndex <= 0 && localStyles.arrowButtonDisabled,
                 pressed && focusedIndex > 0 && localStyles.arrowButtonPressed,
               ]}
@@ -390,7 +398,13 @@ export default function NewBottomNav() {
               <Ionicons
                 name="chevron-back"
                 size={21}
-                color={focusedIndex <= 0 ? "#94a3b8" : "#14532d"}
+                color={
+                  focusedIndex <= 0
+                    ? theme.subtext
+                    : theme.mode === "dark"
+                      ? "#F8FFF9"
+                      : theme.primary
+                }
               />
             </Pressable>
 
@@ -427,6 +441,10 @@ export default function NewBottomNav() {
               disabled={focusedIndex >= moduleData.length - 1}
               style={({ pressed }) => [
                 localStyles.arrowButton,
+                {
+                  backgroundColor: theme.mode === "dark" ? "rgba(18,28,24,0.96)" : theme.card,
+                  borderColor: theme.mode === "dark" ? "rgba(134,239,172,0.42)" : theme.border,
+                },
                 focusedIndex >= moduleData.length - 1 && localStyles.arrowButtonDisabled,
                 pressed &&
                   focusedIndex < moduleData.length - 1 &&
@@ -436,7 +454,13 @@ export default function NewBottomNav() {
               <Ionicons
                 name="chevron-forward"
                 size={21}
-                color={focusedIndex >= moduleData.length - 1 ? "#94a3b8" : "#14532d"}
+                color={
+                  focusedIndex >= moduleData.length - 1
+                    ? theme.subtext
+                    : theme.mode === "dark"
+                      ? "#F8FFF9"
+                      : theme.primary
+                }
               />
             </Pressable>
           </View>

@@ -12,7 +12,7 @@ router.get("/:id", controller.getGuidelineById);
 router.patch("/view/:id", controller.incrementViews);
 router.post("/:id/view", controller.incrementViews);
 router.post("/:id/like", controller.toggleLike);
-router.put("/:id", controller.updateGuideline);
+router.put("/:id", uploadGuideline.array("attachments"), controller.updateGuideline);
 router.delete("/:id", controller.deleteGuideline);
 
 module.exports = router;

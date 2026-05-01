@@ -4,8 +4,37 @@ const UserModel = require("../models/User");
 const mongoose = require("mongoose");
 const cloudinary = require("../config/cloudinary");
 
+const GUIDELINE_NOTIFICATION_LOOKBACK_DAYS = 30;
+
 function sanitizeText(value, max = 240) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function normalizeGuidelineStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  if (["publish", "posted", "active", "public", "live"].includes(status)) {
+    return "published";
+  }
+  return ["draft", "published", "archived"].includes(status) ? status : "draft";
+}
+
+function normalizeGuidelinePayload(payload = {}) {
+  const nextPayload = { ...payload };
+  const publishedValue = nextPayload.published ?? nextPayload.isPublished;
+
+  if (nextPayload.status !== undefined) {
+    nextPayload.status = normalizeGuidelineStatus(nextPayload.status);
+  } else if (
+    publishedValue === true ||
+    String(publishedValue || "").trim().toLowerCase() === "true"
+  ) {
+    nextPayload.status = "published";
+  }
+
+  delete nextPayload.published;
+  delete nextPayload.isPublished;
+
+  return nextPayload;
 }
 
 function getRequestUserId(req) {
@@ -21,6 +50,91 @@ function getRequestUserId(req) {
 
 function isValidObjectId(value) {
   return mongoose.Types.ObjectId.isValid(String(value || ""));
+}
+
+function buildPublishedGuidelineNotification(guideline) {
+  const title = sanitizeText(guideline?.title, 120) || "Untitled guideline";
+  const dedupeKey = `guideline:${guideline._id}:published`;
+
+  return {
+    type: "guideline",
+    title: "New Guideline Posted",
+    message: `MDRRMO posted a new guideline: ${title}`,
+    target: "all",
+    source: "mdrrmo",
+    notificationType: "normal",
+    soundType: "notification",
+    guidelineId: guideline._id,
+    sourceLabel: "MDRRMO",
+    official: true,
+    dedupeKey,
+    actionable: false,
+    read: false,
+    isRead: false,
+    createdAt: guideline.publishedNotificationSentAt || guideline.updatedAt || new Date(),
+  };
+}
+
+async function ensureGuidelineNotificationsForUser(userId, guidelines = []) {
+  if (!isValidObjectId(userId) || !Array.isArray(guidelines) || !guidelines.length) {
+    return;
+  }
+
+  const cutoff = new Date(
+    Date.now() - GUIDELINE_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  );
+  const recentPublishedGuidelines = guidelines.filter((guideline) => {
+    const status = String(guideline?.status || "").toLowerCase();
+    const timestamp = new Date(
+      guideline?.publishedNotificationSentAt || guideline?.updatedAt || guideline?.createdAt || 0
+    ).getTime();
+
+    return status === "published" && !Number.isNaN(timestamp) && timestamp >= cutoff.getTime();
+  });
+
+  if (!recentPublishedGuidelines.length) {
+    return;
+  }
+
+  const user = await UserModel.findById(userId).select("notifications");
+  if (!user) {
+    console.log("[notifications] guideline sync skipped", {
+      reason: "user_not_found",
+      userId: String(userId),
+    });
+    return;
+  }
+
+  const existingDedupeKeys = new Set(
+    (user.notifications || [])
+      .map((item) => String(item?.dedupeKey || ""))
+      .filter(Boolean)
+  );
+  const missingNotifications = recentPublishedGuidelines
+    .filter((guideline) => {
+      const dedupeKey = `guideline:${guideline._id}:published`;
+      return !existingDedupeKeys.has(dedupeKey);
+    })
+    .map(buildPublishedGuidelineNotification);
+
+  console.log("[notifications] guideline sync check", {
+    userId: String(userId),
+    publishedGuidelines: recentPublishedGuidelines.length,
+    missingGuidelineNotifications: missingNotifications.length,
+  });
+
+  if (!missingNotifications.length) {
+    return;
+  }
+
+  user.notifications.push(...missingNotifications);
+  await user.save();
+
+  console.log("[notifications] guideline notification created:", {
+    userId: String(userId),
+    count: missingNotifications.length,
+  });
+  console.log("[notifications] notification type", "guideline");
 }
 
 function toClientGuideline(guideline, userId = null, includeUserLists = false) {
@@ -45,30 +159,46 @@ function toClientGuideline(guideline, userId = null, includeUserLists = false) {
   };
 }
 
-async function notifyPublishedGuideline(guideline) {
+async function notifyPublishedGuideline(guideline, action = "published") {
   if (String(guideline?.status || "").toLowerCase() !== "published") return;
+  if (guideline?.publishedNotificationSent) {
+    console.log("[guidelines] shouldNotify:", false, {
+      reason: "already_sent",
+      guidelineId: String(guideline._id),
+      title: guideline.title,
+      status: guideline.status,
+    });
+    return;
+  }
 
-  const title = sanitizeText(guideline?.title, 120) || "Untitled guideline";
   const dedupeKey = `guideline:${guideline._id}:published`;
+  const notification = buildPublishedGuidelineNotification(guideline);
 
-  await UserModel.updateMany(
+  const result = await UserModel.updateMany(
     {
       isArchived: { $ne: true },
       "notifications.dedupeKey": { $ne: dedupeKey },
     },
     {
       $push: {
-        notifications: {
-          type: "drrmo_guideline",
-          message: `A new MDRRMO advisory has been published: ${title}.`,
-          dedupeKey,
-          actionable: false,
-          read: false,
-          createdAt: new Date(),
-        },
+        notifications: notification,
       },
     }
   );
+
+  guideline.publishedNotificationSent = true;
+  guideline.publishedNotificationSentAt = new Date();
+  await guideline.save();
+
+  console.log("[notifications] guideline notification created:", {
+    guidelineId: String(guideline._id),
+    action,
+    title: notification.message,
+    status: guideline.status,
+    matched: result?.matchedCount,
+    modified: result?.modifiedCount,
+  });
+  console.log("[notifications] notification type", "guideline");
 }
 
 // ✅ Create a new guideline
@@ -96,11 +226,22 @@ const createGuideline = async (req, res) => {
     );
 
     const guideline = await PostingGuideline.create({
-      ...req.body,
+      ...normalizeGuidelinePayload(req.body),
       attachments,
     });
 
-    await notifyPublishedGuideline(guideline);
+    const status = String(req.body.status || "").toLowerCase().trim();
+    const savedStatus = status || String(guideline.status || "").toLowerCase().trim();
+    const shouldNotify = savedStatus === "published" && !guideline.publishedNotificationSent;
+    console.log("[guidelines] saved status:", {
+      title: guideline.title,
+      status: guideline.status,
+    });
+    console.log("[guidelines] shouldNotify:", shouldNotify);
+
+    if (shouldNotify) {
+      await notifyPublishedGuideline(guideline, "published");
+    }
 
     return res.status(201).json(toClientGuideline(guideline, getRequestUserId(req), true));
   } catch (err) {
@@ -171,6 +312,10 @@ const getGuidelines = async (req, res) => {
       createdAt: -1,
       updatedAt: -1,
     });
+
+    if (filter.status === "published" && isValidObjectId(userId)) {
+      await ensureGuidelineNotificationsForUser(userId, guidelines);
+    }
 
     res
       .status(200)
@@ -260,13 +405,25 @@ const updateGuideline = async (req, res) => {
     // =======================
     // ✅ Update other fields
     // =======================
-    const wasPublished = String(guideline.status || "").toLowerCase() === "published";
-    Object.assign(guideline, req.body);
+    const previousStatus = String(guideline.status || "").toLowerCase().trim();
+    Object.assign(guideline, normalizeGuidelinePayload(req.body));
 
     await guideline.save();
-    const isPublished = String(guideline.status || "").toLowerCase() === "published";
-    if (!wasPublished && isPublished) {
-      await notifyPublishedGuideline(guideline);
+    const status = String(req.body.status || "").toLowerCase().trim();
+    const nextStatus = status || String(guideline.status || "").toLowerCase().trim();
+    const shouldNotify =
+      previousStatus !== "published" &&
+      nextStatus === "published" &&
+      !guideline.publishedNotificationSent;
+
+    console.log("[guidelines] saved status:", {
+      title: guideline.title,
+      status: guideline.status,
+    });
+    console.log("[guidelines] shouldNotify:", shouldNotify);
+
+    if (shouldNotify) {
+      await notifyPublishedGuideline(guideline, "published");
     }
 
     res.json(toClientGuideline(guideline, getRequestUserId(req), true));

@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef } from "react";
+import React, { useContext, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { UserContext } from "../UserContext";
+import { useTheme } from "../contexts/ThemeContext";
 
 const BASE_URL = "http://172.31.100.51:8000";
 const DEFAULT_AVATAR =
@@ -57,6 +58,11 @@ const RESOURCE_ITEMS = [
     route: "Guidelines",
   },
   {
+    icon: "radio-outline",
+    label: "Announcements",
+    route: "Announcement",
+  },
+  {
     icon: "map-outline",
     label: "Digital Twin",
     route: "Map",
@@ -75,6 +81,11 @@ const ACCOUNT_ITEMS = [
     label: "Account",
     route: "Profile",
   },
+  {
+    icon: "settings-outline",
+    label: "Settings",
+    route: "Settings",
+  },
 ];
 
 export default function AppDrawer({
@@ -83,6 +94,8 @@ export default function AppDrawer({
   onNavigate,
 }) {
   const { user } = useContext(UserContext);
+  const { theme } = useTheme();
+  const themed = useMemo(() => createThemedDrawerStyles(theme), [theme]);
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
 
   useEffect(() => {
@@ -127,24 +140,24 @@ export default function AppDrawer({
 
   return (
     <View style={styles.overlay}>
-      <Animated.View style={[styles.drawer, { transform: [{ translateX }] }]}>
+      <Animated.View style={[styles.drawer, themed.drawer, { transform: [{ translateX }] }]}>
         <View style={styles.headerRow}>
           <View style={styles.headerBrand}>
-            <View style={styles.headerBadge}>
-              <Ionicons name="shield-half-outline" size={20} color="#1F4D36" />
+            <View style={[styles.headerBadge, themed.softIcon]}>
+              <Ionicons name="shield-half-outline" size={20} color={theme.primary} />
             </View>
             <View style={styles.headerCopy}>
-              <Text style={styles.headerEyebrow}>Disaster Response</Text>
-              <Text style={styles.headerTitle}>Main Menu</Text>
+              <Text style={[styles.headerEyebrow, themed.subtext]}>Disaster Response</Text>
+              <Text style={[styles.headerTitle, themed.text]}>Main Menu</Text>
             </View>
           </View>
 
           <TouchableOpacity
-            style={styles.closeBtn}
+            style={[styles.closeBtn, themed.closeBtn]}
             onPress={() => closeDrawer()}
             activeOpacity={0.82}
           >
-            <Ionicons name="close" size={20} color="#1F2937" />
+            <Ionicons name="close" size={20} color={theme.text} />
           </TouchableOpacity>
         </View>
 
@@ -154,54 +167,55 @@ export default function AppDrawer({
           showsVerticalScrollIndicator={false}
         >
           <TouchableOpacity
-            style={styles.profileCard}
+            style={[styles.profileCard, themed.card]}
             activeOpacity={0.88}
             onPress={() => goTo("Profile")}
           >
             <Image source={{ uri: avatarUri }} style={styles.avatar} />
             <View style={styles.profileCopy}>
-              <Text style={styles.profileName} numberOfLines={1}>
+              <Text style={[styles.profileName, themed.text]} numberOfLines={1}>
                 {displayName}
               </Text>
-              <Text style={styles.profileSub} numberOfLines={2}>
+              <Text style={[styles.profileSub, themed.subtext]} numberOfLines={2}>
                 Open profile and account settings.
               </Text>
             </View>
-            <View style={styles.profileArrow}>
-              <Ionicons name="chevron-forward" size={18} color="#355A2C" />
+            <View style={[styles.profileArrow, themed.softIcon]}>
+              <Ionicons name="chevron-forward" size={18} color={theme.primary} />
             </View>
           </TouchableOpacity>
 
       
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <Text style={[styles.sectionTitle, themed.text]}>Quick Actions</Text>
             <View style={styles.quickGrid}>
               {QUICK_ACTIONS.map((item) => (
                 <TouchableOpacity
                   key={item.label}
-                  style={styles.quickCard}
+                  style={[styles.quickCard, themed.card]}
                   onPress={() => goTo(item.route, item.params)}
                   activeOpacity={0.86}
                 >
-                  <View style={styles.quickIconWrap}>
-                    <Ionicons name={item.icon} size={21} color="#1F4D36" />
+                  <View style={[styles.quickIconWrap, themed.softIcon]}>
+                    <Ionicons name={item.icon} size={21} color={theme.primary} />
                   </View>
-                  <Text style={styles.quickLabel}>{item.label}</Text>
+                  <Text style={[styles.quickLabel, themed.text]}>{item.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Resources</Text>
-            <View style={styles.listGroup}>
+            <Text style={[styles.sectionTitle, themed.text]}>Resources</Text>
+            <View style={[styles.listGroup, themed.card]}>
               {RESOURCE_ITEMS.map((item, index) => (
                 <DrawerRow
                   key={item.label}
                   icon={item.icon}
                   label={item.label}
                   isLast={index === RESOURCE_ITEMS.length - 1}
+                  theme={theme}
                   onPress={() => goTo(item.route, item.params)}
                 />
               ))}
@@ -209,14 +223,15 @@ export default function AppDrawer({
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Account and Security</Text>
-            <View style={styles.listGroup}>
+            <Text style={[styles.sectionTitle, themed.text]}>Account and Security</Text>
+            <View style={[styles.listGroup, themed.card]}>
               {ACCOUNT_ITEMS.map((item, index) => (
                 <DrawerRow
                   key={item.label}
                   icon={item.icon}
                   label={item.label}
                   isLast={index === ACCOUNT_ITEMS.length - 1}
+                  theme={theme}
                   onPress={() => goTo(item.route, item.params)}
                 />
               ))}
@@ -241,7 +256,7 @@ export default function AppDrawer({
       </Animated.View>
 
       <TouchableOpacity
-        style={styles.backdrop}
+        style={[styles.backdrop, { backgroundColor: theme.overlay }]}
         onPress={() => closeDrawer()}
         activeOpacity={1}
       />
@@ -249,20 +264,20 @@ export default function AppDrawer({
   );
 }
 
-function DrawerRow({ icon, label, onPress, isLast = false }) {
+function DrawerRow({ icon, label, onPress, isLast = false, theme }) {
   return (
     <TouchableOpacity
-      style={[styles.rowItem, isLast && styles.rowItemLast]}
+      style={[styles.rowItem, { borderBottomColor: theme.border }, isLast && styles.rowItemLast]}
       onPress={onPress}
       activeOpacity={0.84}
     >
       <View style={styles.rowLeft}>
-        <View style={styles.rowIconWrap}>
-          <Ionicons name={icon} size={20} color="#1F4D36" />
+        <View style={[styles.rowIconWrap, { backgroundColor: theme.primarySoft }]}>
+          <Ionicons name={icon} size={20} color={theme.primary} />
         </View>
-        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={[styles.rowLabel, { color: theme.text }]}>{label}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color="#7A857D" />
+      <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
     </TouchableOpacity>
   );
 }
@@ -594,3 +609,28 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+
+function createThemedDrawerStyles(theme) {
+  return StyleSheet.create({
+    drawer: {
+      backgroundColor: theme.background,
+    },
+    card: {
+      backgroundColor: theme.card,
+      borderColor: theme.border,
+    },
+    softIcon: {
+      backgroundColor: theme.primarySoft,
+      borderColor: theme.border,
+    },
+    closeBtn: {
+      backgroundColor: theme.surfaceAlt,
+    },
+    text: {
+      color: theme.text,
+    },
+    subtext: {
+      color: theme.subtext,
+    },
+  });
+}

@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const slugify = require("slugify");
 
-const PostingGuidelineSchema = new mongoose.Schema(
+const AnnouncementSchema = new mongoose.Schema(
   {
     title: {
       type: String,
@@ -13,28 +13,33 @@ const PostingGuidelineSchema = new mongoose.Schema(
     slug: {
       type: String,
       unique: true,
+      sparse: true,
     },
 
     description: {
       type: String,
       required: [true, "Description is required"],
+      trim: true,
     },
 
     category: {
       type: String,
-      enum: [
-        "earthquake",
-        "flood",
-        "typhoon",
-        "general",
-      ],
-      required: true,
+      enum: ["general", "advisory", "event", "service", "weather", "emergency"],
+      default: "general",
+      trim: true,
+    },
+
+    priorityLevel: {
+      type: String,
+      enum: ["low", "medium", "high", "critical"],
+      default: "medium",
     },
 
     status: {
       type: String,
       enum: ["draft", "published", "archived"],
       default: "draft",
+      index: true,
     },
 
     publishedNotificationSent: {
@@ -47,24 +52,13 @@ const PostingGuidelineSchema = new mongoose.Schema(
       default: null,
     },
 
-    priorityLevel: {
-      type: String,
-      enum: ["low", "medium", "high", "critical"],
-      default: "medium",
-    },
-
     attachments: [
       {
         fileName: String,
         fileUrl: String,
-        public_id: String, // ✅ REQUIRED
+        public_id: String,
       },
     ],
-
-    isArchived: {
-      type: Boolean,
-      default: false,
-    },
 
     views: {
       type: Number,
@@ -88,27 +82,25 @@ const PostingGuidelineSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-PostingGuidelineSchema.virtual("viewCount").get(function () {
+AnnouncementSchema.virtual("viewCount").get(function () {
   return Array.isArray(this.viewedBy) ? this.viewedBy.length : this.views || 0;
 });
 
-PostingGuidelineSchema.virtual("likeCount").get(function () {
+AnnouncementSchema.virtual("likeCount").get(function () {
   return Array.isArray(this.likedBy) ? this.likedBy.length : 0;
 });
 
-PostingGuidelineSchema.set("toJSON", { virtuals: true });
-PostingGuidelineSchema.set("toObject", { virtuals: true });
+AnnouncementSchema.set("toJSON", { virtuals: true });
+AnnouncementSchema.set("toObject", { virtuals: true });
 
-PostingGuidelineSchema.index({ status: 1, category: 1, createdAt: -1 });
+AnnouncementSchema.index({ status: 1, category: 1, createdAt: -1 });
 
-// Auto-generate slug before saving
-PostingGuidelineSchema.pre("save", async function () {
+AnnouncementSchema.pre("save", function () {
   if (!this.isModified("title") || !this.title) return;
-  this.slug = slugify(this.title, { lower: true, strict: true });
+  this.slug = slugify(this.title, {
+    lower: true,
+    strict: true,
+  });
 });
 
-
-
-const GuidelinesModel = mongoose.model("Guidelines", PostingGuidelineSchema);
-
-module.exports = GuidelinesModel;
+module.exports = mongoose.model("Announcement", AnnouncementSchema);

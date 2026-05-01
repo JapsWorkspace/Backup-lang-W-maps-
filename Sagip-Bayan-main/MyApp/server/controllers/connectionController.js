@@ -27,6 +27,15 @@ async function addNotification(userId, notification) {
       notifications: {
         type: notification.type,
         message: notification.message,
+        notificationType: notification.notificationType || "normal",
+        soundType: notification.soundType || "notification",
+        incidentId: notification.incidentId || null,
+        targetBarangays: Array.isArray(notification.targetBarangays)
+          ? notification.targetBarangays
+          : [],
+        targetUsers: Array.isArray(notification.targetUsers)
+          ? notification.targetUsers
+          : [],
         connectionId: notification.connectionId || null,
         actorUserId: notification.actorUserId || null,
         actorName: notification.actorName || "",

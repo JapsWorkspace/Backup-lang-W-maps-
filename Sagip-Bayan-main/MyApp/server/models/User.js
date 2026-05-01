@@ -15,6 +15,82 @@ const notificationSchema = new mongoose.Schema(
       trim: true,
     },
 
+    title: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    sourceLabel: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    source: {
+      type: String,
+      default: "",
+      trim: true,
+      lowercase: true,
+    },
+
+    official: {
+      type: Boolean,
+      default: false,
+    },
+
+    target: {
+      type: String,
+      enum: ["all", "users", "barangays", ""],
+      default: "",
+      trim: true,
+      lowercase: true,
+    },
+
+    notificationType: {
+      type: String,
+      enum: ["normal", "danger"],
+      default: "normal",
+      trim: true,
+      lowercase: true,
+    },
+
+    soundType: {
+      type: String,
+      enum: ["notification", "normal", "danger"],
+      default: "notification",
+      trim: true,
+      lowercase: true,
+    },
+
+    guidelineId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Guidelines",
+      default: null,
+    },
+
+    announcementId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Announcement",
+      default: null,
+    },
+
+    incidentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Incident",
+      default: null,
+    },
+
+    targetBarangays: {
+      type: [String],
+      default: [],
+    },
+
+    targetUsers: {
+      type: [mongoose.Schema.Types.ObjectId],
+      default: [],
+    },
+
     connectionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Connection",
@@ -62,6 +138,11 @@ const notificationSchema = new mongoose.Schema(
     },
 
     read: {
+      type: Boolean,
+      default: false,
+    },
+
+    isRead: {
       type: Boolean,
       default: false,
     },

@@ -60,6 +60,24 @@ const uploadGuideline = multer({
   },
 });
 
+const uploadAnnouncement = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const mimetype = String(file.mimetype || "").toLowerCase();
+    const originalname = String(file.originalname || "").toLowerCase();
+
+    const isImageMime = mimetype.startsWith("image/");
+    const isImageExt = /\.(jpg|jpeg|png|webp|heic|heif)$/i.test(originalname);
+
+    if (!isImageMime && !isImageExt) {
+      return cb(new Error("Only image files are allowed"), false);
+    }
+
+    return cb(null, true);
+  },
+});
+
 // =======================
 // ✅ Proof uploader
 // =======================
@@ -142,6 +160,12 @@ uploadGuideline.debugMiddleware = (req, res, next) => {
   next();
 };
 
+uploadAnnouncement.debugMiddleware = (req, res, next) => {
+  console.log("Announcement files:", req.files || req.file);
+  console.log("Body:", req.body);
+  next();
+};
+
 uploadProof.debugMiddleware = (req, res, next) => {
   console.log("Proof files:", req.files || req.file);
   console.log("Body:", req.body);
@@ -165,6 +189,7 @@ uploadIncidentImage.debugMiddleware = (req, res, next) => {
 // =======================
 module.exports = {
   uploadGuideline,
+  uploadAnnouncement,
   uploadProof,
   uploadAvatar,
   uploadIncidentImage,

@@ -4,10 +4,18 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { AppState } from "react-native";
 
 import api from "../../lib/api";
+import {
+  playDangerNotificationSound,
+  playNormalNotificationSound,
+  setupNotificationChannels,
+  unloadNotificationSounds,
+} from "../../utils/notificationSounds";
 import { UserContext } from "../UserContext";
 
 const MESSAGE_META = {
@@ -59,9 +67,33 @@ const MESSAGE_META = {
     sourceLabel: "Incident Alert",
     official: true,
   },
+  guideline: {
+    title: "New guideline posted by MDRRMO",
+    icon: "megaphone-outline",
+    sourceLabel: "MDRRMO",
+    official: true,
+  },
   drrmo_guideline: {
     title: "DRRMO guideline uploaded",
     icon: "megaphone-outline",
+    sourceLabel: "DRRMO",
+    official: true,
+  },
+  announcement: {
+    title: "New MDRRMO announcement",
+    icon: "radio-outline",
+    sourceLabel: "MDRRMO",
+    official: true,
+  },
+  mdrrmo_announcement: {
+    title: "New MDRRMO announcement",
+    icon: "radio-outline",
+    sourceLabel: "MDRRMO",
+    official: true,
+  },
+  drrmo_announcement: {
+    title: "New DRRMO announcement",
+    icon: "radio-outline",
     sourceLabel: "DRRMO",
     official: true,
   },
@@ -86,6 +118,35 @@ function normalizeType(type) {
   return String(type || "system").toLowerCase().trim();
 }
 
+function getNotificationSoundType(item) {
+  const explicit = String(item?.soundType || "").toLowerCase();
+  if (explicit === "danger") return "danger";
+  if (explicit === "notification" || explicit === "normal") return "notification";
+
+  const notificationType = String(item?.notificationType || "").toLowerCase();
+  if (notificationType === "danger") return "danger";
+
+  const type = normalizeType(item?.type);
+  if (
+    [
+      "nearby_incident",
+      "nearby_repeated_incident",
+      "route_hazard",
+      "hazard_ahead",
+    ].includes(type)
+  ) {
+    return "danger";
+  }
+
+  return "notification";
+}
+
+function playNotificationSoundFor(item) {
+  return getNotificationSoundType(item) === "danger"
+    ? playDangerNotificationSound()
+    : playNormalNotificationSound();
+}
+
 function normalizeServerNotification(item) {
   const type = normalizeType(item?.type);
   const meta = MESSAGE_META[type] || MESSAGE_META.system;
@@ -105,8 +166,12 @@ function normalizeServerNotification(item) {
     message: item?.message || "There is a new safety update.",
     icon: item?.icon || meta.icon,
     sourceLabel: item?.sourceLabel || meta.sourceLabel || null,
+    source: item?.source || null,
     official: Boolean(item?.official ?? meta.official),
-    read: Boolean(item?.read),
+    notificationType: item?.notificationType || null,
+    soundType: getNotificationSoundType(item),
+    incidentId: item?.incidentId || null,
+    read: Boolean(item?.read || item?.isRead),
     createdAt: item?.createdAt || new Date().toISOString(),
     connectionId,
     actorUserId,
@@ -114,6 +179,8 @@ function normalizeServerNotification(item) {
     actorUsername: item?.actorUsername || "",
     actorAvatar: item?.actorAvatar || "",
     connectionCode: item?.connectionCode || "",
+    guidelineId: item?.guidelineId || null,
+    announcementId: item?.announcementId || null,
     actionable: (Boolean(item?.actionable) || inferredActionable) && !handledAt,
     handledAt,
   };
@@ -124,6 +191,8 @@ export function NotificationProvider({ children }) {
   const [serverNotifications, setServerNotifications] = useState([]);
   const [localNotifications, setLocalNotifications] = useState([]);
   const [notificationsVersion, setNotificationsVersion] = useState(0);
+  const seenServerNotificationIdsRef = useRef(new Set());
+  const initialFetchCompleteRef = useRef(false);
 
   const addNotification = useCallback((event) => {
     const type = normalizeType(event?.type);
@@ -137,6 +206,9 @@ export function NotificationProvider({ children }) {
       icon: event?.icon || meta.icon,
       sourceLabel: event?.sourceLabel || meta.sourceLabel || null,
       official: Boolean(event?.official ?? meta.official),
+      notificationType: event?.notificationType || null,
+      soundType: getNotificationSoundType(event),
+      incidentId: event?.incidentId || null,
       read: false,
       createdAt: new Date().toISOString(),
       connectionId: event?.connectionId || null,
@@ -145,11 +217,14 @@ export function NotificationProvider({ children }) {
       actorUsername: event?.actorUsername || "",
       actorAvatar: event?.actorAvatar || "",
       connectionCode: event?.connectionCode || "",
+      guidelineId: event?.guidelineId || null,
+      announcementId: event?.announcementId || null,
       actionable: Boolean(event?.actionable),
       handledAt: event?.handledAt || null,
     };
 
     setLocalNotifications((prev) => [notification, ...prev].slice(0, 30));
+    playNotificationSoundFor(notification);
   }, []);
 
   const refreshNotifications = useCallback(async () => {
@@ -163,8 +238,33 @@ export function NotificationProvider({ children }) {
       const items = Array.isArray(res.data)
         ? res.data.map(normalizeServerNotification)
         : [];
+      const types = items.map((item) => item.type);
+      const guidelineNotifications = items.filter((item) =>
+        ["guideline", "drrmo_guideline"].includes(item.type)
+      );
+
+      console.log("[notifications] fetched count", items.length);
+      console.log("[notifications] types:", types);
+      console.log("[notifications] guideline notifications:", guidelineNotifications.length);
+
+      const previousIds = seenServerNotificationIdsRef.current;
+      const nextIds = new Set(items.map((item) => item.id));
+      const newUnreadItems = items.filter(
+        (item) => !item.read && !previousIds.has(item.id)
+      );
+
       setServerNotifications(items);
       setNotificationsVersion((prev) => prev + 1);
+      seenServerNotificationIdsRef.current = nextIds;
+
+      if (initialFetchCompleteRef.current) {
+        newUnreadItems
+          .slice()
+          .reverse()
+          .forEach((item) => playNotificationSoundFor(item));
+      } else {
+        initialFetchCompleteRef.current = true;
+      }
     } catch (err) {
       console.log("[notifications] fetch failed:", err?.message);
     }
@@ -175,8 +275,27 @@ export function NotificationProvider({ children }) {
   }, [refreshNotifications]);
 
   useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refreshNotifications();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [refreshNotifications]);
+
+  useEffect(() => {
     setLocalNotifications([]);
+    seenServerNotificationIdsRef.current = new Set();
+    initialFetchCompleteRef.current = false;
   }, [user?._id]);
+
+  useEffect(() => {
+    setupNotificationChannels();
+    return () => {
+      unloadNotificationSounds();
+    };
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
