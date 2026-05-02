@@ -362,7 +362,7 @@ const getConnectionMembers = async (req, res) => {
 
     const connection = await ConnectionModel.findById(connectionId).populate(
       "members",
-      "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
+      "fname lname username avatar location shareSafetyLocation safetyStatus safetyMessage safetyUpdatedAt"
     );
 
     if (!connection) {
@@ -386,7 +386,7 @@ const getUserConnections = async (req, res) => {
       .populate("creator", "fname lname username avatar")
       .populate(
         "members",
-        "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
+        "fname lname username avatar location shareSafetyLocation safetyStatus safetyMessage safetyUpdatedAt"
       )
       .populate("pendingMembers", "fname lname username avatar");
 
@@ -638,7 +638,7 @@ const getConnectionById = async (req, res) => {
       .populate("creator", "fname lname username avatar")
       .populate(
         "members",
-        "fname lname username avatar location safetyStatus safetyMessage safetyUpdatedAt"
+        "fname lname username avatar location shareSafetyLocation safetyStatus safetyMessage safetyUpdatedAt"
       )
       .populate("pendingMembers", "fname lname username avatar");
 

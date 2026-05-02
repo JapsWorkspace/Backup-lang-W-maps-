@@ -67,6 +67,12 @@ const MESSAGE_META = {
     sourceLabel: "Incident Alert",
     official: true,
   },
+  barangay_incident_danger: {
+    title: "Barangay danger warning",
+    icon: "warning-outline",
+    sourceLabel: "Incident Alert",
+    official: true,
+  },
   guideline: {
     title: "New guideline posted by MDRRMO",
     icon: "megaphone-outline",
@@ -131,6 +137,7 @@ function getNotificationSoundType(item) {
     [
       "nearby_incident",
       "nearby_repeated_incident",
+      "barangay_incident_danger",
       "route_hazard",
       "hazard_ahead",
     ].includes(type)

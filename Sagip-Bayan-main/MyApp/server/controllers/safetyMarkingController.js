@@ -1,4 +1,6 @@
 const SafetyDebugLocation = require("../models/SafetyDebugLocation");
+const UserModel = require("../models/User");
+const mongoose = require("mongoose");
 const jaenGeoJSON = require("../../screens/data/jaen.json");
 
 const JAEN_BOUNDS = {
@@ -141,6 +143,17 @@ async function getUniqueActiveDebugMarkers() {
     .sort({ updatedAt: -1 })
     .lean();
 
+  const markerUserIds = markers
+    .map((marker) => normalizeMarkerUserId(marker))
+    .filter((userId) => mongoose.Types.ObjectId.isValid(userId));
+  const shareEnabledUsers = await UserModel.find({
+    _id: { $in: markerUserIds },
+    shareSafetyLocation: true,
+  })
+    .select("_id")
+    .lean();
+  const shareEnabledIds = new Set(shareEnabledUsers.map((item) => String(item._id)));
+
   const seen = new Set();
   const duplicateIds = [];
   const uniqueMarkers = [];
@@ -148,7 +161,9 @@ async function getUniqueActiveDebugMarkers() {
   markers.forEach((marker) => {
     const userId = normalizeMarkerUserId(marker);
     const isValidMarker =
-      userId && isInsideJaen(marker.latitude, marker.longitude);
+      userId &&
+      shareEnabledIds.has(userId) &&
+      isInsideJaen(marker.latitude, marker.longitude);
 
     if (!isValidMarker) {
       duplicateIds.push(marker._id);
@@ -199,6 +214,30 @@ exports.upsertDebugLocation = async (req, res) => {
 
     if (!userId) {
       return res.status(400).json({ message: "userId is required." });
+    }
+
+    const user = await UserModel.findById(userId).select("shareSafetyLocation");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    if (user.shareSafetyLocation !== true) {
+      await SafetyDebugLocation.findOneAndUpdate(
+        { userId },
+        {
+          $set: {
+            debugMode: false,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+
+      return res.status(403).json({
+        message: "Debug Mode is ON, but location sharing is disabled.",
+        shareSafetyLocation: false,
+      });
     }
 
     let locationAdjusted = false;

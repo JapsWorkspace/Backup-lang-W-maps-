@@ -74,6 +74,12 @@ export async function getApiBaseUrl() {
   return resolveApiBase();
 }
 
+export function updateShareSafetyLocation(userId, shareSafetyLocation) {
+  return api.patch(`/user/${userId}/share-safety-location`, {
+    shareSafetyLocation,
+  });
+}
+
 export async function postMultipart(path, formData) {
   const baseURL = await resolveApiBase();
   const token = await AsyncStorage.getItem("token");

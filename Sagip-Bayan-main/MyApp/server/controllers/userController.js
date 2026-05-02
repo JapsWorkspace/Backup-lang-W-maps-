@@ -1,4 +1,5 @@
 const UserModel = require("../models/User");
+const SafetyDebugLocation = require("../models/SafetyDebugLocation");
 const PostingGuideline = require("../models/Guidelines");
 const crypto = require("crypto");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
@@ -521,6 +522,12 @@ const updateLocation = async (req, res) => {
       });
     }
 
+    const existingUser = await UserModel.findById(userId).select("location");
+
+    if (!existingUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
     await UserModel.findByIdAndUpdate(
       userId,
       {
@@ -528,7 +535,7 @@ const updateLocation = async (req, res) => {
           lat,
           lng,
           updatedAt: new Date(),
-          share: true,
+          share: existingUser.location?.share === true,
         },
       },
       { new: true }
@@ -538,6 +545,63 @@ const updateLocation = async (req, res) => {
   } catch (err) {
     console.error("Update location error:", err);
     res.status(500).json({ message: "Failed to update location" });
+  }
+};
+
+/* =========================
+   SAFETY LOCATION PRIVACY
+========================= */
+const updateShareSafetyLocation = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { shareSafetyLocation } = req.body || {};
+
+    if (typeof shareSafetyLocation !== "boolean") {
+      return res.status(400).json({
+        message: "shareSafetyLocation must be true or false",
+      });
+    }
+
+    const user = await UserModel.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          shareSafetyLocation,
+          "location.share": shareSafetyLocation,
+        },
+      },
+      { new: true, runValidators: true }
+    ).select("-password -otp -otpExpires -verificationToken -verificationTokenExpires");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!shareSafetyLocation) {
+      await SafetyDebugLocation.findOneAndUpdate(
+        { userId: String(userId) },
+        {
+          $set: {
+            debugMode: false,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+    }
+
+    return res.json({
+      message: shareSafetyLocation
+        ? "Safety Marking location sharing enabled."
+        : "Safety Marking location sharing disabled.",
+      user,
+      shareSafetyLocation: user.shareSafetyLocation === true,
+    });
+  } catch (err) {
+    console.error("Update safety location sharing error:", err);
+    return res.status(500).json({
+      message: "Failed to update Safety Marking location sharing.",
+    });
   }
 };
 
@@ -903,6 +967,7 @@ module.exports = {
   toggleTwoFactor,
   loginUser,
   updateLocation,
+  updateShareSafetyLocation,
   getUserById,
   uploadAvatar,
   getUserNotifications,

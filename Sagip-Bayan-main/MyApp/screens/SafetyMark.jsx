@@ -292,6 +292,7 @@ function normalizeConnection(connection, currentUserId) {
       username: safeDisplayText(member.username, "Unknown member"),
       avatar: resolveAvatarPath(member.avatar),
       safetyStatus: member.safetyStatus || "UNKNOWN",
+      shareSafetyLocation: member.shareSafetyLocation === true,
       safetyLabel: getSafetyLabel(member.safetyStatus),
       safetyColor: getSafetyColor(member.safetyStatus),
       updatedLabel: timeAgo(member?.location?.updatedAt),
@@ -581,6 +582,7 @@ export default function SafetyMark() {
   const [joinRequestModalMessage, setJoinRequestModalMessage] = useState(
     "Wait for the approval of the admin."
   );
+  const isSafetyLocationSharingEnabled = user?.shareSafetyLocation === true;
 
   const panelExpandedTop = SCREEN_HEIGHT * 0.44;
   const panelCollapsedTop = SCREEN_HEIGHT * 0.74;
@@ -721,6 +723,11 @@ export default function SafetyMark() {
     async (status = localSafetyStatus) => {
       if (!user?._id) return null;
 
+      if (!isSafetyLocationSharingEnabled) {
+        await turnOffSafetyDebugLocation(user._id);
+        return null;
+      }
+
       const coordinate = generateSeededJaenDebugLocation(user._id);
       console.log("[debug-markers] current user:", user._id);
       console.log("[debug-markers] generated coordinate:", coordinate);
@@ -747,7 +754,7 @@ export default function SafetyMark() {
       });
       return res?.data?.marker || null;
     },
-    [localSafetyStatus, user]
+    [isSafetyLocationSharingEnabled, localSafetyStatus, user]
   );
 
   const refreshAll = useCallback(async () => {
@@ -797,6 +804,20 @@ export default function SafetyMark() {
         console.log("[SafetyMark] debug status sync failed:", err?.message);
       });
   }, [fetchDebugMarkers, localSafetyStatus, safetyDebugMode, syncOwnDebugLocation, user?._id]);
+
+  useEffect(() => {
+    if (!safetyDebugMode || !user?._id || isSafetyLocationSharingEnabled) return;
+
+    turnOffSafetyDebugLocation(user._id)
+      .then(() => {
+        setDebugMarkers((items) =>
+          items.filter((item) => String(item.id) !== String(user._id))
+        );
+      })
+      .catch((err) => {
+        console.log("[SafetyMark] privacy debug cleanup failed:", err?.message);
+      });
+  }, [isSafetyLocationSharingEnabled, safetyDebugMode, user?._id]);
 
   useEffect(() => {
     if (!user?._id) return;
@@ -911,6 +932,8 @@ export default function SafetyMark() {
   const visibleMembersOnMap = useMemo(() => {
     const insideMembers = allPeople
       .map((member) => {
+        if (member.shareSafetyLocation !== true) return null;
+
         const coordinate = normalizeCoordinate(member.location);
         if (!coordinate || !member.insideJaen) return null;
 
@@ -923,16 +946,20 @@ export default function SafetyMark() {
 
     if (safetyDebugMode) {
       const serverMarkers = dedupeMarkersByUserId(
-        debugMarkers.map((marker) => ({
-          ...marker,
-          isCurrentUser: String(marker.id) === String(user?._id),
-        }))
+        debugMarkers
+          .filter((marker) => String(marker.id) !== String(user?._id) || isSafetyLocationSharingEnabled)
+          .map((marker) => ({
+            ...marker,
+            isCurrentUser: String(marker.id) === String(user?._id),
+          }))
       );
       const hasCurrentUser = serverMarkers.some(
         (marker) => String(marker.id) === String(user?._id)
       );
 
-      if (hasCurrentUser || !user?._id) return serverMarkers;
+      if (hasCurrentUser || !user?._id || !isSafetyLocationSharingEnabled) {
+        return serverMarkers;
+      }
 
       return dedupeMarkersByUserId([
         {
@@ -953,7 +980,7 @@ export default function SafetyMark() {
 
     const userCoordinate = normalizeCoordinate(user?.location);
     const shouldShowCurrentUser =
-      user?.location?.share !== false &&
+      isSafetyLocationSharingEnabled &&
       userCoordinate &&
       isPointInsideJaen(userCoordinate.latitude, userCoordinate.longitude);
 
@@ -978,7 +1005,14 @@ export default function SafetyMark() {
     if (insideMembers.length) return insideMembers;
 
     return [];
-  }, [allPeople, debugMarkers, localSafetyStatus, safetyDebugMode, user]);
+  }, [
+    allPeople,
+    debugMarkers,
+    isSafetyLocationSharingEnabled,
+    localSafetyStatus,
+    safetyDebugMode,
+    user,
+  ]);
 
   useEffect(() => {
     if (!safetyDebugMode) return;
@@ -1087,6 +1121,19 @@ export default function SafetyMark() {
 
     try {
       if (nextValue) {
+        if (!isSafetyLocationSharingEnabled) {
+          setSafetyDebugMode(true);
+          await turnOffSafetyDebugLocation(user._id);
+          setDebugMarkers((items) =>
+            items.filter((item) => String(item.id) !== String(user._id))
+          );
+          Alert.alert(
+            "Location Sharing Disabled",
+            "Debug Mode is ON, but location sharing is disabled."
+          );
+          return;
+        }
+
         const coordinate = generateSeededJaenDebugLocation(user._id);
         setSafetyDebugMode(true);
         await syncOwnDebugLocation(localSafetyStatus);
@@ -1333,7 +1380,9 @@ export default function SafetyMark() {
           <Text style={styles.legendBadgeText}>Jaen Safety Map</Text>
         </View>
         <Text style={styles.legendNote}>
-          {safetyDebugMode
+          {safetyDebugMode && !isSafetyLocationSharingEnabled
+            ? "Debug Mode ON, location sharing disabled"
+            : safetyDebugMode
             ? "Debug Mode ON: synced demo markers inside Jaen"
             : outsideCount > 0
               ? `${outsideCount} outside Jaen`
@@ -1507,7 +1556,9 @@ export default function SafetyMark() {
                 ]}
               >
                 {safetyDebugMode
-                  ? "Debug Mode ON: synced demo markers are visible"
+                  ? isSafetyLocationSharingEnabled
+                    ? "Debug Mode ON: synced demo markers are visible"
+                    : "Debug Mode is ON, but location sharing is disabled."
                   : "Debug Mode OFF: real location visibility is followed"}
               </Text>
             </Pressable>
@@ -1601,7 +1652,9 @@ export default function SafetyMark() {
                               </View>
                             </View>
                             <Text style={[styles.personMeta, themed.subtext]}>
-                              {member.insideJaen || !member.location
+                              {!member.shareSafetyLocation
+                                ? "Location sharing disabled"
+                                : member.insideJaen || !member.location
                                 ? member.updatedLabel
                                 : "Outside the boundary of Jaen"}
                             </Text>

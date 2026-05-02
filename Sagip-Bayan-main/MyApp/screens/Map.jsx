@@ -139,22 +139,30 @@ function getHeatStyle(count, maxCount, selected) {
       strokeColor: selected ? "#FACC15" : null,
       fillColor: null,
       strokeWidth: selected ? 3.5 : 1.65,
+      glowWidth: 0,
+      glowAlpha: 0,
+      fillPulseAlpha: 0,
       glow: false,
     };
   }
 
-  const ratio = Math.min(1, count / maxCount);
-  const alpha = 0.12 + ratio * 0.48;
-  const green = Math.round(185 - ratio * 165);
-  const blue = Math.round(160 - ratio * 145);
-  const red = ratio >= 1 ? 255 : Math.round(185 + ratio * 70);
-  const strokeColor = ratio >= 1 ? "#FF1F1F" : `rgb(${red}, ${green}, ${blue})`;
+  const ratio = Math.min(1, count / Math.max(maxCount, 1));
+  const thresholdBoost = count >= 6 ? 1 : count >= 3 ? 0.72 : 0.38;
+  const intensity = Math.max(ratio, thresholdBoost);
+  const alpha = count >= 6 ? 0.62 : count >= 3 ? 0.42 : 0.24;
+  const green = Math.round(210 - intensity * 190);
+  const blue = Math.round(190 - intensity * 175);
+  const red = Math.round(210 + intensity * 45);
+  const strokeColor = count >= 6 || ratio >= 1 ? "#FF1F1F" : `rgb(${red}, ${green}, ${blue})`;
 
   return {
     strokeColor: selected ? "#FACC15" : strokeColor,
     fillColor: `rgba(${red}, ${green}, ${blue}, ${alpha})`,
-    strokeWidth: selected ? 3.5 : ratio > 0.65 ? 3 : 2,
-    glow: ratio >= 0.6,
+    strokeWidth: selected ? 3.5 : count >= 6 ? 3.5 : count >= 3 ? 2.75 : 2.1,
+    glowWidth: count >= 6 ? 11 : count >= 3 ? 8 : 5,
+    glowAlpha: count >= 6 ? 0.92 : count >= 3 ? 0.66 : 0.38,
+    fillPulseAlpha: count >= 6 ? 0.16 : count >= 3 ? 0.11 : 0.07,
+    glow: count > 0,
   };
 }
 
@@ -1125,6 +1133,7 @@ function EvacuationPlaceMarker({ color, selected = false, label }) {
   color,
   selected = false,
   incidentCount = 0,
+  dominantIncidentLabel = "",
   onPress,
 }) {
   return (
@@ -1168,6 +1177,14 @@ function EvacuationPlaceMarker({ color, selected = false, label }) {
         {incidentCount > 0 ? (
           <View style={styles.barangayIncidentBadge}>
             <Text style={styles.barangayIncidentBadgeText}>{incidentCount}</Text>
+          </View>
+        ) : null}
+
+        {dominantIncidentLabel ? (
+          <View style={styles.barangayIncidentTooltip}>
+            <Text style={styles.barangayIncidentTooltipText} numberOfLines={1}>
+              {dominantIncidentLabel}
+            </Text>
           </View>
         ) : null}
       </TouchableOpacity>
@@ -1451,6 +1468,9 @@ const [selectedBarangay, setSelectedBarangay] = useState(null);
 const [showIncidentMarkers, setShowIncidentMarkers] = useState(false);
 const [showBarangayMarkers, setShowBarangayMarkers] = useState(false);
 const [incidentDebugMode, setIncidentDebugMode] = useState(false);
+const [evacGpsDebugMode, setEvacGpsDebugMode] = useState(false);
+const [evacGpsLocating, setEvacGpsLocating] = useState(false);
+const [gpsLocation, setGpsLocation] = useState(null);
 
 const {
   activeMapModule,
@@ -1484,6 +1504,8 @@ const {
   const recenterTimerRef = useRef(null);
   const routeHazardAlertedRef = useRef(new Set());
   const clusterAlertedRef = useRef(new Set());
+  const previousEvacGpsDebugModeRef = useRef(evacGpsDebugMode);
+  const previousRouteOriginRef = useRef(USER_POS);
   const [isNavigating, setIsNavigating] = useState(false);
   const [followMode, setFollowMode] = useState(false);
   const [currentHeading, setCurrentHeading] = useState(0);
@@ -1491,6 +1513,10 @@ const {
   const [nextRoutePoint, setNextRoutePoint] = useState(null);
   const [currentSpeedKmh, setCurrentSpeedKmh] = useState(0);
   const [routeHazardBanner, setRouteHazardBanner] = useState(null);
+  const routeStartCoordinate = useMemo(() => {
+    const gpsCoordinate = toMarkerCoordinate(gpsLocation);
+    return evacGpsDebugMode && gpsCoordinate ? gpsCoordinate : USER_POS;
+  }, [evacGpsDebugMode, gpsLocation]);
 
   const requestedModule = MODULES.some((item) => item.key === navRoute.params?.module)
     ? navRoute.params.module
@@ -1506,6 +1532,122 @@ const {
   useEffect(() => {
     recentModuleChangeRef.current = Date.now();
   }, [activeModule, panelState]);
+
+  useEffect(() => {
+    if (isEvac) return;
+
+    setEvacGpsDebugMode(false);
+    setGpsLocation(null);
+  }, [isEvac]);
+
+  useEffect(() => {
+    if (!isEvac || !evacGpsDebugMode || Platform.OS === "web") return undefined;
+
+    let mounted = true;
+    let subscription = null;
+
+    async function watchEvacGpsLocation() {
+      setEvacGpsLocating(true);
+
+      try {
+        const Location = await import("expo-location");
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (!mounted) return;
+
+        if (permission.status !== "granted") {
+          setEvacGpsDebugMode(false);
+          setGpsLocation(null);
+          Alert.alert(
+            "GPS Location Needed",
+            "Allow location access to use your phone GPS for dynamic pathfinding."
+          );
+          return;
+        }
+
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.BestForNavigation,
+        });
+        const initialLocation = toMarkerCoordinate({
+          latitude: current?.coords?.latitude,
+          longitude: current?.coords?.longitude,
+        });
+
+        if (initialLocation && mounted) {
+          setGpsLocation(initialLocation);
+          setCurrentLocation(initialLocation);
+        }
+
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1200,
+            distanceInterval: 2,
+          },
+          (position) => {
+            const nextLocation = toMarkerCoordinate({
+              latitude: position?.coords?.latitude,
+              longitude: position?.coords?.longitude,
+            });
+
+            if (!nextLocation) return;
+            setGpsLocation(nextLocation);
+            setCurrentLocation(nextLocation);
+          }
+        );
+      } catch (err) {
+        console.log("Evac GPS debug failed:", err?.message);
+        if (mounted) {
+          setEvacGpsDebugMode(false);
+          setGpsLocation(null);
+          Alert.alert(
+            "GPS Unavailable",
+            err?.message || "Unable to get your phone location right now."
+          );
+        }
+      } finally {
+        if (mounted) setEvacGpsLocating(false);
+      }
+    }
+
+    watchEvacGpsLocation();
+
+    return () => {
+      mounted = false;
+      subscription?.remove?.();
+    };
+  }, [evacGpsDebugMode, isEvac]);
+
+  useEffect(() => {
+    const previousValue = previousEvacGpsDebugModeRef.current;
+    previousEvacGpsDebugModeRef.current = evacGpsDebugMode;
+    const previousOrigin = previousRouteOriginRef.current;
+    const originMovedMeters = distanceMetersBetween(previousOrigin, routeStartCoordinate) || 0;
+    previousRouteOriginRef.current = routeStartCoordinate;
+
+    if (
+      !isEvac ||
+      isNavigating ||
+      !routeRequested ||
+      (previousValue === evacGpsDebugMode && originMovedMeters < 25)
+    ) {
+      return;
+    }
+
+    setRouteRequested(false);
+    setRoutes([]);
+    setActiveRoute(null);
+    setTimeout(() => setRouteRequested(true), 0);
+  }, [
+    evacGpsDebugMode,
+    isEvac,
+    isNavigating,
+    routeRequested,
+    routeStartCoordinate,
+    setActiveRoute,
+    setRouteRequested,
+    setRoutes,
+  ]);
 
   const showHomepageBarangays = !activeModule || isIncident || isEvac;
   const showBarangayNameMarkers =
@@ -1627,12 +1769,13 @@ const {
     setRoutes([]);
     setActiveRoute(null);
 
-    mapRef.current?.fitToCoordinates([USER_POS, nextPlace], {
+    mapRef.current?.fitToCoordinates([routeStartCoordinate, nextPlace], {
       edgePadding: EDGE_PADDING,
       animated: true,
     });
   }, [
     navRoute.params,
+    routeStartCoordinate,
     setActiveMapModule,
     setActiveRoute,
     setEvac,
@@ -1654,7 +1797,7 @@ const {
 
   const routing = useRouting({
     enabled: isEvac && routeRequested && !!normalizedSelectedEvac,
-    from: [USER_POS.latitude, USER_POS.longitude],
+    from: [routeStartCoordinate.latitude, routeStartCoordinate.longitude],
     to: normalizedSelectedEvac
       ? {
           lat: normalizedSelectedEvac.latitude,
@@ -1705,7 +1848,7 @@ const {
         currentLocation?.longitude
       )
         ? currentLocation
-        : USER_POS;
+        : routeStartCoordinate;
       const { snappedLocation, nextPoint, heading } = getNearestRouteProgress(
         coords,
         rawLocation
@@ -1743,6 +1886,7 @@ const {
       isBottomNavInteracting,
       isEvac,
       isNavigating,
+      routeStartCoordinate,
     ]
   );
 
@@ -1780,22 +1924,22 @@ const {
   const resetNavigationCamera = useCallback(() => {
     mapRef.current?.animateCamera(
       {
-        center: USER_POS,
+        center: routeStartCoordinate,
         heading: 0,
         pitch: 0,
         zoom: 14,
       },
       { duration: 450 }
     );
-  }, []);
+  }, [routeStartCoordinate]);
 
-  const startNavigationCamera = useCallback((route) => {
+  const startNavigationCamera = useCallback((route, origin = routeStartCoordinate) => {
     const coords = safeArray(route?.coords).filter((coord) =>
       isValidCoordinate(coord?.latitude, coord?.longitude)
     );
     const { snappedLocation, nextPoint, heading } = getNearestRouteProgress(
       coords,
-      USER_POS
+      origin
     );
 
     lastNavigationCameraAtRef.current = Date.now();
@@ -1810,7 +1954,7 @@ const {
     );
 
     return { heading, nextPoint, snappedLocation };
-  }, []);
+  }, [routeStartCoordinate]);
 
   useEffect(() => {
     if (!routeRequested || !routing.routes?.length) return;
@@ -2113,10 +2257,15 @@ const homepageBarangays = useMemo(() => {
 
     return Object.fromEntries(
       Object.entries(stats).map(([id, stat]) => {
-        const topType =
-          Object.entries(stat.typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ||
-          "Incident";
-        return [id, { ...stat, topType }];
+        const [topType = "Incident", topTypeCount = 0] =
+          Object.entries(stat.typeCounts).sort((a, b) => b[1] - a[1])[0] || [];
+        const dominantIncidentLabel =
+          topTypeCount > 0
+            ? `${formatIncidentType(topType)}: ${topTypeCount} report${
+                topTypeCount === 1 ? "" : "s"
+              }`
+            : "";
+        return [id, { ...stat, topType, topTypeCount, dominantIncidentLabel }];
       })
     );
   }, [homepageBarangays, normalizedIncidents]);
@@ -2294,7 +2443,10 @@ const handleSelectBarangay = useCallback(
   };
 }, [incidentDraft.latitude, incidentDraft.longitude]);
 
-  const userCoordinate = useMemo(() => toMarkerCoordinate(USER_POS), []);
+  const userCoordinate = useMemo(
+    () => toMarkerCoordinate(routeStartCoordinate),
+    [routeStartCoordinate]
+  );
   const selectedEvacCoordinate = useMemo(
     () => toMarkerCoordinate(normalizedSelectedEvac),
     [normalizedSelectedEvac]
@@ -2352,7 +2504,7 @@ const shouldShowIncidentMarkers =
   const exitNavigationMode = useCallback(() => {
     setIsNavigating(false);
     setFollowMode(false);
-    setCurrentLocation(USER_POS);
+    setCurrentLocation(routeStartCoordinate);
     setNextRoutePoint(null);
     setCurrentHeading(0);
     setRouteHazardBanner(null);
@@ -2367,7 +2519,15 @@ const shouldShowIncidentMarkers =
       clearTimeout(recenterTimerRef.current);
       recenterTimerRef.current = null;
     }
-  }, [resetNavigationCamera, setActiveRoute, setPanelState, setPanelY, setRouteRequested, setRoutes]);
+  }, [
+    resetNavigationCamera,
+    routeStartCoordinate,
+    setActiveRoute,
+    setPanelState,
+    setPanelY,
+    setRouteRequested,
+    setRoutes,
+  ]);
 
   const handleBack = useCallback(() => {
     navigation.setParams({
@@ -2420,12 +2580,20 @@ const shouldShowIncidentMarkers =
       setRouteHazardBanner(null);
       routeHazardAlertedRef.current.clear();
 
-      mapRef.current?.fitToCoordinates([USER_POS, normalizedPlace], {
+      mapRef.current?.fitToCoordinates([routeStartCoordinate, normalizedPlace], {
         edgePadding: EDGE_PADDING,
         animated: true,
       });
     },
-    [setActiveRoute, setEvac, setPanelState, setPanelY, setRouteRequested, setRoutes]
+    [
+      routeStartCoordinate,
+      setActiveRoute,
+      setEvac,
+      setPanelState,
+      setPanelY,
+      setRouteRequested,
+      setRoutes,
+    ]
   );
   
   const handleMapPress = useCallback(
@@ -2966,9 +3134,14 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           <Polygon
             key={`home-brgy-glow-${barangay.id}`}
             coordinates={barangay.mainRing}
-            strokeColor={`rgba(255,31,31,${heatPulseLevel})`}
-            strokeWidth={8}
-            fillColor={`rgba(255,31,31,${0.05 + heatPulseLevel * 0.08})`}
+            strokeColor={`rgba(255,31,31,${Math.min(
+              heatStyle.glowAlpha,
+              heatPulseLevel
+            )})`}
+            strokeWidth={heatStyle.glowWidth}
+            fillColor={`rgba(255,31,31,${
+              0.04 + heatPulseLevel * heatStyle.fillPulseAlpha
+            })`}
             tappable={false}
             zIndex={isSelected ? 27 : 17}
           />
@@ -3046,6 +3219,9 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
         color={barangay.color}
         selected={selectedBarangay?.id === barangay.id}
         incidentCount={isEvac ? 0 : incidentBarangayCounts[barangay.id]?.count || 0}
+        dominantIncidentLabel={
+          isEvac ? "" : incidentBarangayCounts[barangay.id]?.dominantIncidentLabel || ""
+        }
         onPress={() => {
           if (!isEvac) {
             handleSelectBarangay(barangay);
@@ -3171,7 +3347,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           incidentCount={selectedBarangay ? selectedBarangayIncidents.length : normalizedIncidents.length}
           incidentTopType={
             selectedBarangay
-              ? incidentBarangayCounts[selectedBarangay.id]?.topType || ""
+              ? incidentBarangayCounts[selectedBarangay.id]?.dominantIncidentLabel || ""
               : ""
           }
           incidents={selectedBarangayIncidents}
@@ -3211,6 +3387,10 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
           exitNavigationMode={exitNavigationMode}
           navigationTopSummary={navigationTopSummary}
           currentSpeedKmh={currentSpeedKmh}
+          evacGpsDebugMode={evacGpsDebugMode}
+          setEvacGpsDebugMode={setEvacGpsDebugMode}
+          evacGpsLocating={evacGpsLocating}
+          routeStartCoordinate={routeStartCoordinate}
           openQuickIncidentReport={openQuickIncidentReport}
           quickReportVisible={quickReportVisible}
           setQuickReportVisible={setQuickReportVisible}
@@ -3287,6 +3467,10 @@ function ModulePanel({
   exitNavigationMode,
   navigationTopSummary,
   currentSpeedKmh,
+  evacGpsDebugMode,
+  setEvacGpsDebugMode,
+  evacGpsLocating,
+  routeStartCoordinate,
   openQuickIncidentReport,
   quickReportVisible,
   setQuickReportVisible,
@@ -3348,8 +3532,8 @@ function ModulePanel({
       );
     }
 
-    return items.sort((a, b) => distance(USER_POS, a.coordinate) - distance(USER_POS, b.coordinate));
-  }, [evacFilter, normalizedEvacPlaces]);
+    return items.sort((a, b) => distance(routeStartCoordinate, a.coordinate) - distance(routeStartCoordinate, b.coordinate));
+  }, [evacFilter, normalizedEvacPlaces, routeStartCoordinate]);
 
   const evacPlacesByStatus = useMemo(
     () => ({
@@ -3518,10 +3702,13 @@ function ModulePanel({
   const startNavigation = () => {
     if (!evac || !selectedRoute?.coords?.length) return;
 
-    const { heading, nextPoint, snappedLocation } = startNavigationCamera(selectedRoute);
+    const { heading, nextPoint, snappedLocation } = startNavigationCamera(
+      selectedRoute,
+      routeStartCoordinate
+    );
 
     setActiveRoute(selectedRoute);
-    setCurrentLocation(snappedLocation || USER_POS);
+    setCurrentLocation(snappedLocation || routeStartCoordinate);
     setNextRoutePoint(nextPoint);
     setCurrentHeading(heading);
     setIsNavigating(true);
@@ -4173,6 +4360,45 @@ function ModulePanel({
 
             {!isNavigating && (
               <>
+            <TouchableOpacity
+              activeOpacity={0.88}
+              style={[
+                styles.debugStatusCard,
+                themedOverlay.softCard,
+                evacGpsDebugMode && styles.debugStatusCardActive,
+                evacGpsLocating && styles.debugStatusCardDisabled,
+              ]}
+              disabled={evacGpsLocating}
+              onPress={() => {
+                if (!evacGpsDebugMode && Platform.OS === "web") {
+                  Alert.alert(
+                    "GPS Unavailable",
+                    "Phone GPS is not available in this app view."
+                  );
+                  return;
+                }
+
+                setEvacGpsDebugMode((value) => !value);
+              }}
+            >
+              <Ionicons
+                name={evacGpsDebugMode ? "navigate" : "navigate-outline"}
+                size={18}
+                color={evacGpsDebugMode ? "#FFFFFF" : "#14532D"}
+              />
+              <Text
+                style={[
+                  styles.debugStatusText,
+                  themedOverlay.primaryText,
+                  evacGpsDebugMode && styles.debugStatusTextActive,
+                ]}
+              >
+                {evacGpsDebugMode
+                  ? "GPS Debug ON: using actual phone location."
+                  : "GPS Debug OFF: using demo location for Evac Place."}
+              </Text>
+            </TouchableOpacity>
+
             <View style={styles.panelSection}>
               <Text style={styles.sectionLabel}>Availability overview</Text>
               <View style={styles.statusSummaryRow}>
@@ -5912,6 +6138,7 @@ barangayMarker: {
   borderWidth: 1,
   flexDirection: "row",
   alignItems: "center",
+  position: "relative",
   shadowColor: "#000",
   shadowOpacity: 0.14,
   shadowRadius: 6,
@@ -5972,6 +6199,26 @@ barangayIncidentBadge: {
 barangayIncidentBadgeText: {
   color: "#FFFFFF",
   fontSize: 10,
+  fontWeight: "900",
+},
+
+barangayIncidentTooltip: {
+  position: "absolute",
+  left: 8,
+  right: 8,
+  top: 38,
+  minHeight: 19,
+  paddingHorizontal: 7,
+  borderRadius: 9,
+  backgroundColor: "rgba(127,29,29,0.95)",
+  alignItems: "center",
+  justifyContent: "center",
+},
+
+barangayIncidentTooltipText: {
+  color: "#FFFFFF",
+  fontSize: 9,
+  lineHeight: 11,
   fontWeight: "900",
 },
 
@@ -6514,6 +6761,10 @@ barangayIncidentBadgeText: {
   debugStatusCardActive: {
     backgroundColor: "#14532D",
     borderColor: "#14532D",
+  },
+
+  debugStatusCardDisabled: {
+    opacity: 0.7,
   },
 
   debugStatusText: {

@@ -177,7 +177,7 @@ const locationSchema = new mongoose.Schema(
     },
     share: {
       type: Boolean,
-      default: true,
+      default: false,
     },
   },
   { _id: false }
@@ -276,8 +276,14 @@ const userSchema = new mongoose.Schema(
         lat: null,
         lng: null,
         updatedAt: null,
-        share: true,
+        share: false,
       }),
+    },
+
+    shareSafetyLocation: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
 
     connections: [

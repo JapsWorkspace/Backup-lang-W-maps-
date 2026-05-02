@@ -7,6 +7,18 @@ const DUPLICATE_INCIDENT_RADIUS_METERS = 100;
 const DUPLICATE_INCIDENT_WINDOW_HOURS = 24;
 const INCIDENT_USER_ALERT_RADIUS_METERS = 1000;
 const INCIDENT_USER_ALERT_RECENT_HOURS = 24;
+const INCIDENT_CLUSTER_RECENT_HOURS = 6;
+const INCIDENT_CLUSTER_RADIUS_METERS = 3500;
+const INCIDENT_CLUSTER_THRESHOLDS = [
+  { count: 10, level: "danger" },
+  { count: 8, level: "warning" },
+  { count: 5, level: "caution" },
+];
+const BARANGAY_DANGER_THRESHOLDS = [
+  { count: 10, level: "severe" },
+  { count: 6, level: "danger" },
+  { count: 3, level: "caution" },
+];
 const DUPLICATE_ACTIVE_STATUSES = [
   "accepted",
   "pending",
@@ -15,6 +27,42 @@ const DUPLICATE_ACTIVE_STATUSES = [
   "onprocess",
   "on process",
 ];
+
+const BARANGAY_BY_DISTRICT = {
+  "District 1": [
+    "Bagong Sikat",
+    "Balbalino",
+    "Banganan",
+    "Langla",
+    "Mabini",
+    "Maligaya",
+    "Santo Tomas South",
+  ],
+  "District 2": [
+    "Imbunia",
+    "Lambakin",
+    "Marawa",
+    "Naglabrahan",
+    "San Josef",
+    "San Roque",
+    "Santo Tomas North",
+  ],
+  "District 3": [
+    "Don Mariano Marcos",
+    "Hilera",
+    "Pinanggaan",
+    "San Andres",
+    "San Nicolas",
+    "Ulanin-Pitak",
+  ],
+  "District 4": [
+    "Calabasa",
+    "Kasanglayan",
+    "Pamacpacan",
+    "Putlod",
+    "Sapang",
+  ],
+};
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -70,6 +118,61 @@ function normalizeStatus(status) {
 
 function isAcceptedIncident(incident) {
   return normalizeStatus(incident?.status) === "accepted";
+}
+
+function normalizeIncidentType(type) {
+  const clean = sanitizeText(type, 60).toLowerCase();
+  if (clean.includes("flood")) return "flood";
+  if (clean.includes("fire")) return "fire";
+  if (clean.includes("earthquake")) return "earthquake";
+  if (clean.includes("typhoon") || clean.includes("storm")) return "typhoon";
+  return clean || "incident";
+}
+
+function getBarangayDangerThreshold(count) {
+  return BARANGAY_DANGER_THRESHOLDS.find((item) => count >= item.count) || null;
+}
+
+function getIncidentClusterThreshold(count) {
+  return INCIDENT_CLUSTER_THRESHOLDS.find((item) => count >= item.count) || null;
+}
+
+function getDistrictBarangays(district) {
+  return BARANGAY_BY_DISTRICT[sanitizeText(district, 80)] || [];
+}
+
+function uniqueNormalizedBarangays(barangays) {
+  const seen = new Set();
+  return barangays.filter((name) => {
+    const key = sanitizeText(name, 80).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getIncidentClusterMessage(type, barangayCount) {
+  const category = normalizeIncidentType(type);
+  if (category === "flood") {
+    return "Multiple nearby barangays have reported flooding. Please stay alert.";
+  }
+
+  return `${barangayCount} barangays have reported the same incident nearby. Be careful.`;
+}
+
+function getBarangayDangerMessage(type) {
+  switch (normalizeIncidentType(type)) {
+    case "flood":
+      return "Warning: Multiple flood reports have been recorded in your barangay. Avoid flooded areas and stay alert.";
+    case "fire":
+      return "Warning: Multiple fire reports have been recorded in your barangay. Stay away from affected areas.";
+    case "earthquake":
+      return "Warning: Multiple earthquake-related reports have been recorded in your barangay. Check your surroundings and stay alert.";
+    case "typhoon":
+      return "Warning: Multiple typhoon-related hazards have been reported in your barangay. Stay indoors if possible.";
+    default:
+      return "Warning: Multiple incidents have been reported in your barangay. Please stay alert.";
+  }
 }
 
 function toRadians(value) {
@@ -308,44 +411,88 @@ async function notifyNearbyRepeatedIncidents(incident) {
   try {
     if (!isAcceptedIncident(incident)) return;
 
-    const type = sanitizeText(incident?.type, 60).toLowerCase();
+    const type = normalizeIncidentType(incident?.type);
     const barangay = sanitizeText(incident?.barangay, 80);
+    const district = sanitizeText(incident?.district, 80);
     if (!type || !barangay) return;
 
-    const since = new Date(Date.now() - 6 * 60 * 60 * 1000);
-    const recent = await IncidentModel.aggregate([
-      {
-        $match: {
-          status: "accepted",
-          type: { $regex: new RegExp(`^${escapeRegex(type)}$`, "i") },
-          barangay: { $ne: "" },
-          createdAt: { $gte: since },
-        },
-      },
-      {
-        $group: {
-          _id: { $toLower: "$barangay" },
-          barangay: { $first: "$barangay" },
-          count: { $sum: 1 },
-        },
-      },
-      { $match: { count: { $gte: 1 } } },
+    const since = new Date(
+      Date.now() - INCIDENT_CLUSTER_RECENT_HOURS * 60 * 60 * 1000
+    );
+    const incidentPoint = {
+      latitude: Number(incident?.latitude),
+      longitude: Number(incident?.longitude),
+    };
+    const districtBarangays = getDistrictBarangays(district);
+    const recentAcceptedReports = await IncidentModel.find({
+      status: "accepted",
+      barangay: { $ne: "" },
+      createdAt: { $gte: since },
+    }).select("_id type district barangay latitude longitude createdAt");
+
+    const clusterReports = recentAcceptedReports.filter((candidate) => {
+      if (normalizeIncidentType(candidate?.type) !== type) return false;
+
+      const candidateBarangay = sanitizeText(candidate?.barangay, 80);
+      const candidateDistrict = sanitizeText(candidate?.district, 80);
+      const sameBarangay =
+        candidateBarangay.toLowerCase() === barangay.toLowerCase();
+      const sameDistrict =
+        district && candidateDistrict && candidateDistrict.toLowerCase() === district.toLowerCase();
+      const listedNearby =
+        districtBarangays.length &&
+        districtBarangays.some(
+          (name) => name.toLowerCase() === candidateBarangay.toLowerCase()
+        );
+      const candidatePoint = {
+        latitude: Number(candidate?.latitude),
+        longitude: Number(candidate?.longitude),
+      };
+      const closeByCoordinate =
+        Number.isFinite(incidentPoint.latitude) &&
+        Number.isFinite(incidentPoint.longitude) &&
+        Number.isFinite(candidatePoint.latitude) &&
+        Number.isFinite(candidatePoint.longitude) &&
+        distanceMeters(incidentPoint, candidatePoint) <= INCIDENT_CLUSTER_RADIUS_METERS;
+
+      return sameBarangay || sameDistrict || listedNearby || closeByCoordinate;
+    });
+
+    const totalReports = clusterReports.length;
+    const threshold = getIncidentClusterThreshold(totalReports);
+    if (!threshold) return;
+
+    const previousThreshold = getIncidentClusterThreshold(Math.max(0, totalReports - 1));
+    if (previousThreshold?.level === threshold.level) return;
+
+    const clusterBarangays = uniqueNormalizedBarangays(
+      clusterReports.map((item) => sanitizeText(item?.barangay, 80))
+    );
+    const barangayCount = clusterBarangays.length;
+    if (barangayCount < 2) return;
+
+    const affectedBarangays = uniqueNormalizedBarangays([
+      ...clusterBarangays,
+      ...districtBarangays,
     ]);
-
-    const totalReports = recent.reduce((sum, item) => sum + item.count, 0);
-    const barangayCount = recent.length;
-    if (totalReports < 5 || totalReports > 10 || barangayCount < 2) return;
-
-    const barangays = recent.map((item) => item.barangay).filter(Boolean);
+    const barangayGroupKey = clusterBarangays
+      .map((name) => name.toLowerCase())
+      .sort()
+      .join("|");
+    const dedupeKey = `incident-cluster:${type}:${barangayGroupKey}:${threshold.level}`;
     const users = await UserModel.find({
       barangay: {
-        $in: barangays.map((name) => new RegExp(`^${escapeRegex(name)}$`, "i")),
+        $in: affectedBarangays.map((name) => new RegExp(`^${escapeRegex(name)}$`, "i")),
       },
       isArchived: { $ne: true },
     }).select("_id barangay");
 
-    const windowKey = `${type}:${Math.floor(Date.now() / (6 * 60 * 60 * 1000))}`;
-    const message = `${barangayCount} barangays have reported the same incident nearby. Please stay alert.`;
+    if (!users.length) {
+      console.log("[incident notify] No users found for incident cluster:", dedupeKey);
+      return;
+    }
+
+    const message = getIncidentClusterMessage(type, barangayCount);
 
     await Promise.all(
       users.map((user) =>
@@ -354,13 +501,91 @@ async function notifyNearbyRepeatedIncidents(incident) {
           message,
           notificationType: "danger",
           soundType: "danger",
-          dedupeKey: `nearby-repeated:${windowKey}`,
+          incidentId: incident._id,
+          targetBarangays: affectedBarangays,
+          targetUsers: [user._id],
+          dedupeKey,
           actionable: false,
         })
       )
     );
+
+    console.log(
+      `[incident notify] Cluster ${threshold.level} sent for ${type}: ${totalReports} accepted reports across ${barangayCount} barangays.`
+    );
   } catch (err) {
     console.error("Nearby repeated incident notification error:", err);
+  }
+}
+
+async function notifyBarangayIncidentDangerThreshold(incident) {
+  try {
+    if (!isAcceptedIncident(incident)) return;
+
+    const barangay = sanitizeAlphaNumericText(incident?.barangay, 80);
+    if (!barangay) return;
+
+    const stats = await IncidentModel.aggregate([
+      {
+        $match: {
+          status: "accepted",
+          barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
+        },
+      },
+      {
+        $group: {
+          _id: { $toLower: "$type" },
+          type: { $first: "$type" },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+
+    const totalCount = stats.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    const threshold = getBarangayDangerThreshold(totalCount);
+    if (!threshold) return;
+
+    const previousThreshold = getBarangayDangerThreshold(Math.max(0, totalCount - 1));
+    if (previousThreshold?.level === threshold.level) return;
+
+    const dominant = stats[0] || {};
+    const dominantType = normalizeIncidentType(dominant.type);
+    const dedupeKey = `barangay-danger:${barangay.toLowerCase()}:${dominantType}:${threshold.level}`;
+
+    const users = await UserModel.find({
+      barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
+      isArchived: { $ne: true },
+    }).select("_id barangay");
+
+    if (!users.length) {
+      console.log("[incident notify] No users found for barangay danger threshold:", barangay);
+      return;
+    }
+
+    const message = getBarangayDangerMessage(dominantType);
+
+    await Promise.all(
+      users.map((user) =>
+        addNotification(user._id, {
+          type: "barangay_incident_danger",
+          message,
+          notificationType: "danger",
+          soundType: "danger",
+          incidentId: incident._id,
+          targetBarangays: [barangay],
+          targetUsers: [user._id],
+          dedupeKey,
+          actionable: false,
+        })
+      )
+    );
+
+    console.log(
+      `[incident notify] Barangay danger threshold ${threshold.level} reached for ${barangay}: ${totalCount} accepted reports, dominant ${dominantType}.`
+    );
+  } catch (err) {
+    console.error("Barangay incident danger threshold notification error:", err);
   }
 }
 
@@ -572,6 +797,7 @@ const updateStatus = async (req, res) => {
   try {
     const { status } = req.body;
     const nextStatus = normalizeStatus(status);
+    const previousIncident = await IncidentModel.findById(req.params.id).select("status");
 
     const updatedIncident = await IncidentModel.findByIdAndUpdate(
       req.params.id,
@@ -589,13 +815,17 @@ const updateStatus = async (req, res) => {
       details: `Updated to ${nextStatus || status}`,
     });
 
-    if (nextStatus === "accepted") {
+    if (
+      nextStatus === "accepted" &&
+      normalizeStatus(previousIncident?.status) !== "accepted"
+    ) {
       await notifyUsersInSameBarangay({
         incident: updatedIncident,
         excludeUsername: updatedIncident.usernames,
         excludePhone: updatedIncident.phone,
       });
       await notifyNearbyRepeatedIncidents(updatedIncident);
+      await notifyBarangayIncidentDangerThreshold(updatedIncident);
     }
 
     res.json(updatedIncident);

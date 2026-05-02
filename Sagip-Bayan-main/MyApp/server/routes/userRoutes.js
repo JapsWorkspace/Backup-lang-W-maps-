@@ -30,6 +30,7 @@ router.post("/verify-otp", userController.verifyOtp);
 
 // ✅ ✅ ✅ FIXED LOCATION ROUTE
 router.put("/location/:id", userController.updateLocation);
+router.patch("/:id/share-safety-location", userController.updateShareSafetyLocation);
 
 router.put("/twofactor/:id", userController.toggleTwoFactor);
 router.post("/:id/notification-token", userController.registerNotificationToken);
