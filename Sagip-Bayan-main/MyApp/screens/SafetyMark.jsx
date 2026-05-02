@@ -407,7 +407,7 @@ function normalizeDebugMarker(marker, currentUserId) {
     id: String(marker.userId),
     userId: String(marker.userId),
     username: safeDisplayText(marker.username, "Debug user"),
-    avatar: marker.avatar ? resolveAvatarPath(marker.avatar) : null,
+    avatar: marker.avatar || marker.profileImage ? resolveAvatarPath(marker.avatar || marker.profileImage) : null,
     safetyStatus,
     safetyColor: getSafetyColor(safetyStatus),
     safetyLabel: getSafetyLabel(safetyStatus),
@@ -853,7 +853,7 @@ export default function SafetyMark() {
         }))
       );
       setDebugMarkers(nextMarkers);
-      console.log("[markers after update]", nextMarkers);
+      console.log("[markers] refetched:", nextMarkers.length);
       return nextMarkers;
     } catch (err) {
       console.log("[SafetyMark] debug marker fetch failed:", err?.message);
@@ -925,6 +925,10 @@ export default function SafetyMark() {
         const localMarker = buildCurrentUserDebugMarker(user, normalizedStatus);
         return localMarker ? dedupeMarkersByUserId([localMarker, ...updatedItems]) : updatedItems;
       });
+      setDebugMarkers((items) => {
+        console.log("[markers] local state updated:", items);
+        return items;
+      });
 
       if (user?._id && setUser) {
         await setUser({
@@ -934,6 +938,7 @@ export default function SafetyMark() {
         });
       }
 
+      console.log("[status] changed to:", normalizedStatus);
       console.log("[safety-status] local marker status:", {
         userId: user?._id,
         safetyStatus: normalizedStatus,
@@ -1022,7 +1027,7 @@ export default function SafetyMark() {
   }, [isSafetyLocationSharingEnabled, safetyDebugMode, user?._id]);
 
   useEffect(() => {
-    if (!user?._id) return undefined;
+    if (!safetyDebugMode || !user?._id) return undefined;
 
     fetchDebugMarkers();
     debugPollRef.current = setInterval(fetchDebugMarkers, 3000);
@@ -1033,7 +1038,7 @@ export default function SafetyMark() {
         debugPollRef.current = null;
       }
     };
-  }, [fetchDebugMarkers, user?._id]);
+  }, [fetchDebugMarkers, safetyDebugMode, user?._id]);
 
   useEffect(() => {
     if (!safetyDebugMode || !user?._id) return;
@@ -1636,7 +1641,7 @@ export default function SafetyMark() {
         {visibleMembersOnMap.map((member) =>
           member.coordinate ? (
             <Marker
-              key={`${member.debugMode ? "debug" : "live"}-${member.id}`}
+              key={`${member.debugMode ? "debug" : "live"}-${member.id}-${member.safetyStatus}-${member.safetyColor}`}
               coordinate={member.coordinate}
               title={member.username}
               description={member.safetyLabel}

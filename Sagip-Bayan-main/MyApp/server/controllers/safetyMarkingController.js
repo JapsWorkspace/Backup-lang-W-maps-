@@ -277,17 +277,28 @@ exports.getDebugLocations = async (_req, res) => {
     const users = await SafetyDebugLocation.find({ debugMode: true })
       .sort({ updatedAt: -1 })
       .lean();
+    const payload = users.map((marker) => ({
+      userId: marker.userId,
+      username: marker.username,
+      profileImage: marker.avatar,
+      avatar: marker.avatar,
+      latitude: marker.latitude,
+      longitude: marker.longitude,
+      safetyStatus: marker.safetyStatus,
+      debugMode: marker.debugMode,
+      updatedAt: marker.updatedAt,
+    }));
 
-    console.log("[debug-markers] total:", users.length);
+    console.log("[debug-markers] total:", payload.length);
     console.log(
-      "[debug-markers] returned users:",
-      users.map((marker) => ({
+      "[debug-markers] returned statuses:",
+      payload.map((marker) => ({
         userId: marker.userId,
         safetyStatus: marker.safetyStatus,
       }))
     );
 
-    return res.status(200).json(users);
+    return res.status(200).json(payload);
   } catch (err) {
     console.error("[safety-marking] fetch debug locations failed:", err);
     return res.status(500).json({
@@ -328,7 +339,7 @@ exports.updateSafetyStatus = async (req, res) => {
       });
     }
 
-    console.log("[status updated]", userId, safetyStatus);
+    console.log("[status] updated:", userId, safetyStatus);
 
     return res.status(200).json({
       userId,
