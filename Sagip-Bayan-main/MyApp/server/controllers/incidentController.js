@@ -20,12 +20,11 @@ const BARANGAY_DANGER_THRESHOLDS = [
   { count: 3, level: "caution" },
 ];
 const DUPLICATE_ACTIVE_STATUSES = [
-  "accepted",
   "pending",
   "reported",
-  "onProcess",
-  "onprocess",
   "on process",
+  "on_process",
+  "on-process",
 ];
 
 const BARANGAY_BY_DISTRICT = {
@@ -113,11 +112,22 @@ function normalizeNotificationType(type) {
 }
 
 function normalizeStatus(status) {
-  return String(status || "").trim().toLowerCase();
+  return String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
-function isAcceptedIncident(incident) {
-  return normalizeStatus(incident?.status) === "accepted";
+const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
+const PUBLIC_INCIDENT_STATUS_QUERY = [/^reported$/i, /^on[ _-]+process$/i, /^resolved$/i];
+
+function isPublicIncidentStatus(status) {
+  return PUBLIC_INCIDENT_STATUSES.includes(normalizeStatus(status));
+}
+
+function isPublicIncident(incident) {
+  return isPublicIncidentStatus(incident?.status);
 }
 
 function normalizeIncidentType(type) {
@@ -127,6 +137,15 @@ function normalizeIncidentType(type) {
   if (clean.includes("earthquake")) return "earthquake";
   if (clean.includes("typhoon") || clean.includes("storm")) return "typhoon";
   return clean || "incident";
+}
+
+function formatIncidentTypeLabel(type) {
+  const category = normalizeIncidentType(type);
+  return category
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ") || "Incident";
 }
 
 function getBarangayDangerThreshold(count) {
@@ -261,6 +280,10 @@ async function addNotification(userId, notification) {
       notifications: {
         type: normalizeNotificationType(notification.type),
         message: notification.message,
+        title: notification.title || "",
+        sourceLabel: notification.sourceLabel || "",
+        source: notification.source || "",
+        official: Boolean(notification.official),
         notificationType: notification.notificationType || "normal",
         soundType: notification.soundType || "notification",
         incidentId: notification.incidentId || null,
@@ -288,7 +311,7 @@ async function addNotification(userId, notification) {
 
 async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePhone }) {
   try {
-    if (!isAcceptedIncident(incident)) return;
+    if (!isPublicIncident(incident)) return;
     const incidentCreatedAt = new Date(incident?.createdAt || Date.now());
     const oldestAllowed = Date.now() - INCIDENT_USER_ALERT_RECENT_HOURS * 60 * 60 * 1000;
     if (incidentCreatedAt.getTime() < oldestAllowed) return;
@@ -341,8 +364,10 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
     }
 
     const notificationType = normalizeNotificationType("nearby_incident");
-    const message =
-      "An incident has been reported in your barangay. Please stay alert.";
+    const incidentType = formatIncidentTypeLabel(incident?.type);
+    const message = barangay
+      ? `${incidentType} reported in ${barangay}. Please be careful in your barangay and avoid risky areas.`
+      : `${incidentType} reported nearby. Please be careful and avoid risky areas.`;
 
     const notifyTargets = users.filter((user) => {
       const userUsername = sanitizeText(user?.username, 60).toLowerCase();
@@ -387,7 +412,11 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
       notifyTargets.map((user) =>
         addNotification(user._id, {
           type: notificationType,
+          title: "Incident reported in your barangay",
           message,
+          sourceLabel: "Incident Alert",
+          source: "incident",
+          official: true,
           notificationType: "danger",
           soundType: "danger",
           incidentId: incident._id,
@@ -409,7 +438,7 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
 
 async function notifyNearbyRepeatedIncidents(incident) {
   try {
-    if (!isAcceptedIncident(incident)) return;
+    if (!isPublicIncident(incident)) return;
 
     const type = normalizeIncidentType(incident?.type);
     const barangay = sanitizeText(incident?.barangay, 80);
@@ -424,13 +453,14 @@ async function notifyNearbyRepeatedIncidents(incident) {
       longitude: Number(incident?.longitude),
     };
     const districtBarangays = getDistrictBarangays(district);
-    const recentAcceptedReports = await IncidentModel.find({
-      status: "accepted",
+    const recentPublicReports = await IncidentModel.find({
+      status: { $in: PUBLIC_INCIDENT_STATUS_QUERY },
       barangay: { $ne: "" },
       createdAt: { $gte: since },
     }).select("_id type district barangay latitude longitude createdAt");
 
-    const clusterReports = recentAcceptedReports.filter((candidate) => {
+    const clusterReports = recentPublicReports.filter((candidate) => {
+      if (!isPublicIncident(candidate)) return false;
       if (normalizeIncidentType(candidate?.type) !== type) return false;
 
       const candidateBarangay = sanitizeText(candidate?.barangay, 80);
@@ -498,7 +528,11 @@ async function notifyNearbyRepeatedIncidents(incident) {
       users.map((user) =>
         addNotification(user._id, {
           type: "nearby_repeated_incident",
+          title: "Multiple incident reports nearby",
           message,
+          sourceLabel: "Incident Alert",
+          source: "incident",
+          official: true,
           notificationType: "danger",
           soundType: "danger",
           incidentId: incident._id,
@@ -511,7 +545,7 @@ async function notifyNearbyRepeatedIncidents(incident) {
     );
 
     console.log(
-      `[incident notify] Cluster ${threshold.level} sent for ${type}: ${totalReports} accepted reports across ${barangayCount} barangays.`
+      `[incident notify] Cluster ${threshold.level} sent for ${type}: ${totalReports} public reports across ${barangayCount} barangays.`
     );
   } catch (err) {
     console.error("Nearby repeated incident notification error:", err);
@@ -520,7 +554,7 @@ async function notifyNearbyRepeatedIncidents(incident) {
 
 async function notifyBarangayIncidentDangerThreshold(incident) {
   try {
-    if (!isAcceptedIncident(incident)) return;
+    if (!isPublicIncident(incident)) return;
 
     const barangay = sanitizeAlphaNumericText(incident?.barangay, 80);
     if (!barangay) return;
@@ -528,7 +562,7 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
     const stats = await IncidentModel.aggregate([
       {
         $match: {
-          status: "accepted",
+          status: { $in: PUBLIC_INCIDENT_STATUS_QUERY },
           barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
         },
       },
@@ -569,7 +603,11 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
       users.map((user) =>
         addNotification(user._id, {
           type: "barangay_incident_danger",
+          title: "Barangay danger warning",
           message,
+          sourceLabel: "Incident Alert",
+          source: "incident",
+          official: true,
           notificationType: "danger",
           soundType: "danger",
           incidentId: incident._id,
@@ -582,7 +620,7 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
     );
 
     console.log(
-      `[incident notify] Barangay danger threshold ${threshold.level} reached for ${barangay}: ${totalCount} accepted reports, dominant ${dominantType}.`
+      `[incident notify] Barangay danger threshold ${threshold.level} reached for ${barangay}: ${totalCount} public reports, dominant ${dominantType}.`
     );
   } catch (err) {
     console.error("Barangay incident danger threshold notification error:", err);
@@ -614,12 +652,27 @@ const getIncidents = async (req, res) => {
     const status = sanitizeText(req.query.status, 40);
     const filter = includeAll
       ? status
-        ? { status }
+        ? { status: new RegExp(`^${escapeRegex(status)}$`, "i") }
         : {}
-      : { status: "accepted" };
+      : {
+          status: {
+            $in: PUBLIC_INCIDENT_STATUS_QUERY,
+          },
+        };
 
     const incidents = await IncidentModel.find(filter).sort({ createdAt: -1 });
-    res.json(incidents);
+    const publicIncidents = includeAll
+      ? incidents
+      : incidents.filter((incident) => isPublicIncidentStatus(incident?.status));
+
+    console.log("[incident/getIncidents] public fetch:", {
+      includeAll,
+      requestedStatus: status || "",
+      fetched: incidents.length,
+      returned: publicIncidents.length,
+      statuses: [...new Set(incidents.map((incident) => incident?.status || ""))],
+    });
+    res.json(publicIncidents);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Internal Server Error" });
@@ -782,6 +835,14 @@ const registerIncident = async (req, res) => {
       details: incident.description,
     });
 
+    await notifyUsersInSameBarangay({
+      incident,
+      excludeUsername: "",
+      excludePhone: "",
+    });
+    await notifyNearbyRepeatedIncidents(incident);
+    await notifyBarangayIncidentDangerThreshold(incident);
+
     return res.status(201).json({
       message: "Incident created successfully",
       incident,
@@ -816,8 +877,8 @@ const updateStatus = async (req, res) => {
     });
 
     if (
-      nextStatus === "accepted" &&
-      normalizeStatus(previousIncident?.status) !== "accepted"
+      isPublicIncidentStatus(nextStatus) &&
+      !isPublicIncidentStatus(previousIncident?.status)
     ) {
       await notifyUsersInSameBarangay({
         incident: updatedIncident,

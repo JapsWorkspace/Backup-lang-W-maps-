@@ -42,6 +42,11 @@ import { useTheme } from "./contexts/ThemeContext";
 import useRouting from "./hooks/useRouting";
 import useHazardLayers, { FLOOD_STYLES } from "./hooks/useHazardLayers";
 import { PillMarker } from "./MapIcon";
+import {
+  getClusterThresholdLevel,
+  markClusterNotificationShown,
+  shouldNotifyCluster,
+} from "./services/notificationService";
 import jaenGeoJSON from "./data/jaen.json";
 import areasData from "./data/area.json";
 import {
@@ -104,6 +109,7 @@ const ROUTE_HAZARD_THRESHOLDS_METERS = [300, 100];
 const ROUTE_HAZARD_CHECK_INTERVAL_MS = 2500;
 const INCIDENT_CLUSTER_MIN_REPORTS = 5;
 const INCIDENT_CLUSTER_MIN_BARANGAYS = 2;
+const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
 
 const MODULES = [
   { key: "incident", label: "Incident" },
@@ -121,7 +127,15 @@ const INCIDENT_LEVEL_COLOR = {
 };
 
 function normalizeIncidentStatus(status) {
-  return String(status || "").trim().toLowerCase();
+  return String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isPublicIncident(status) {
+  return PUBLIC_INCIDENT_STATUSES.includes(normalizeIncidentStatus(status));
 }
 
 function getIncidentImages(incident) {
@@ -1192,9 +1206,11 @@ function EvacuationPlaceMarker({ color, selected = false, label }) {
   );
 }
 
-function IncidentListItem({ incident }) {
+function IncidentListItem({ incident, onPress }) {
   const level = String(incident?.level || "low").toLowerCase();
   const levelColor = INCIDENT_LEVEL_COLOR[level] || "#16a34a";
+  const statusLabel = normalizeIncidentStatus(incident?.status) || "reported";
+  const iconName = getIncidentCategoryIcon(incident?.type);
   const images = getIncidentImages(incident);
 
   useEffect(() => {
@@ -1204,14 +1220,31 @@ function IncidentListItem({ incident }) {
   }, [images]);
 
   return (
-    <View style={styles.incidentListItem}>
-      <View style={[styles.incidentSeverityDot, { backgroundColor: levelColor }]} />
+    <TouchableOpacity
+      style={styles.incidentListItem}
+      activeOpacity={0.86}
+      onPress={onPress}
+      disabled={typeof onPress !== "function"}
+    >
+      <View style={[styles.incidentListIcon, { borderColor: levelColor, backgroundColor: `${levelColor}14` }]}>
+        <Ionicons name={iconName} size={16} color={levelColor} />
+      </View>
       <View style={styles.incidentListCopy}>
-        <Text style={styles.incidentListTitle} numberOfLines={1}>
-          {safeDisplayText(incident?.type, "Incident")}
-        </Text>
+        <View style={styles.incidentListTitleRow}>
+          <Text style={styles.incidentListTitle} numberOfLines={1}>
+            {safeDisplayText(incident?.type, "Incident")}
+          </Text>
+          <View style={[styles.incidentStatusChip, { borderColor: levelColor }]}>
+            <Text style={[styles.incidentStatusText, { color: levelColor }]}>
+              {statusLabel}
+            </Text>
+          </View>
+        </View>
         <Text style={styles.incidentListMeta} numberOfLines={1}>
           {safeDisplayText(incident?.location, "Location not provided")}
+        </Text>
+        <Text style={styles.incidentListSubMeta} numberOfLines={1}>
+          {safeDisplayText(incident?.barangay, "Unknown barangay")} | {Number(incident?.latitude).toFixed(5)}, {Number(incident?.longitude).toFixed(5)}
         </Text>
         {!!incident?.description && (
           <Text style={styles.incidentListDescription} numberOfLines={2}>
@@ -1231,26 +1264,22 @@ function IncidentListItem({ incident }) {
           </View>
         )}
       </View>
-      <View style={[styles.incidentLevelChip, { borderColor: levelColor }]}>
-        <Text style={[styles.incidentLevelText, { color: levelColor }]}>
-          {level.toUpperCase()}
-        </Text>
-      </View>
-    </View>
+      <Ionicons name="locate-outline" size={18} color={levelColor} />
+    </TouchableOpacity>
   );
-}function IncidentMapMarker({ level = "critical" }) {
+}function IncidentMapMarker({ level = "critical", type = "incident" }) {
   const markerColor =
     INCIDENT_LEVEL_COLOR[String(level || "critical").toLowerCase()] || "#dc2626";
+  const iconName = getIncidentCategoryIcon(type);
 
   return (
     <View style={{ alignItems: "center" }} collapsable={false}>
       <View
         style={{
-          minWidth: 34,
-          height: 34,
-          paddingHorizontal: 8,
-          borderRadius: 17,
-          backgroundColor: "#ffffff",
+          width: 38,
+          height: 38,
+          borderRadius: 19,
+          backgroundColor: `${markerColor}18`,
           borderWidth: 2,
           borderColor: markerColor,
           alignItems: "center",
@@ -1262,7 +1291,18 @@ function IncidentListItem({ incident }) {
           elevation: 5,
         }}
       >
-        <Ionicons name="warning" size={16} color={markerColor} />
+        <View
+          style={{
+            width: 27,
+            height: 27,
+            borderRadius: 14,
+            backgroundColor: "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name={iconName} size={18} color={markerColor} />
+        </View>
       </View>
 
       <View
@@ -1492,6 +1532,7 @@ const {
   setTravelMode,
   incidents = [],
   setIncidents,
+  refreshIncidents,
   setShowFloodMap,
   setShowEarthquakeHazard,
   isBottomNavInteracting,
@@ -1503,7 +1544,7 @@ const {
   const lastNavigationCameraAtRef = useRef(0);
   const recenterTimerRef = useRef(null);
   const routeHazardAlertedRef = useRef(new Set());
-  const clusterAlertedRef = useRef(new Set());
+  const clusterNotificationInFlightRef = useRef(new Set());
   const previousEvacGpsDebugModeRef = useRef(evacGpsDebugMode);
   const previousRouteOriginRef = useRef(USER_POS);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -1671,7 +1712,7 @@ const {
   const normalizedIncidents = useMemo(
     () =>
       safeArray(incidents)
-        .filter((incident) => normalizeIncidentStatus(incident?.status) === "accepted")
+        .filter((incident) => isPublicIncident(incident?.status))
         .map((incident) => {
           const latitude = toNumber(
             incident?.latitude ?? incident?.lat ?? incident?.location?.lat
@@ -1693,6 +1734,29 @@ const {
         .filter(Boolean),
     [incidents]
   );
+
+  useEffect(() => {
+    const publicVisibleCount = safeArray(incidents).filter((incident) =>
+      isPublicIncident(incident?.status)
+    ).length;
+    const invalidCoordinates = safeArray(incidents)
+      .filter((incident) => isPublicIncident(incident?.status))
+      .filter((incident) => {
+        const latitude = toNumber(incident?.latitude ?? incident?.lat ?? incident?.location?.lat);
+        const longitude = toNumber(incident?.longitude ?? incident?.lng ?? incident?.location?.lng);
+        return !isValidCoordinate(latitude, longitude);
+      })
+      .map((incident) => ({
+        id: incident?._id,
+        latitude: incident?.latitude ?? incident?.lat ?? incident?.location?.lat,
+        longitude: incident?.longitude ?? incident?.lng ?? incident?.location?.lng,
+        status: incident?.status,
+      }));
+
+    console.log("[incidents] public visible count:", publicVisibleCount);
+    console.log("[incidents] invalid coordinates:", invalidCoordinates);
+    console.log("[incidents] valid marker count:", normalizedIncidents.length);
+  }, [incidents, normalizedIncidents.length]);
   const { floodLayers, earthquakeLayer } = useHazardLayers({
     showFloodMap: isFlood,
     showEarthquakeHazard: isEarthquake,
@@ -1718,6 +1782,29 @@ const {
         setActiveRoute(null);
       };
     }, [setActiveRoute, setRouteRequested, setRoutes])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isIncident || typeof refreshIncidents !== "function") return undefined;
+
+      let mounted = true;
+      const fetchFreshIncidents = () => {
+        refreshIncidents().catch((err) => {
+          if (mounted) {
+            console.log("[incidents] refresh failed:", err?.message || err);
+          }
+        });
+      };
+
+      fetchFreshIncidents();
+      const intervalId = setInterval(fetchFreshIncidents, 15000);
+
+      return () => {
+        mounted = false;
+        clearInterval(intervalId);
+      };
+    }, [isIncident, refreshIncidents])
   );
 
   useEffect(() => {
@@ -2280,6 +2367,25 @@ const homepageBarangays = useMemo(() => {
   );
 
   useEffect(() => {
+    console.log("[heatmap] public visible incidents:", normalizedIncidents.length);
+    console.log(
+      "[heatmap] barangay incident counts:",
+      Object.fromEntries(
+        homepageBarangays.map((barangay) => [
+          barangay.label,
+          incidentBarangayCounts[barangay.id]?.count || 0,
+        ])
+      )
+    );
+    console.log("[heatmap] max count:", maxBarangayIncidentCount);
+  }, [
+    homepageBarangays,
+    incidentBarangayCounts,
+    maxBarangayIncidentCount,
+    normalizedIncidents.length,
+  ]);
+
+  useEffect(() => {
     if (!maxBarangayIncidentCount) {
       setHeatPulseLevel(0.45);
       return undefined;
@@ -2319,47 +2425,65 @@ const homepageBarangays = useMemo(() => {
       });
     });
 
-    return Object.values(grouped).filter(
-      (item) =>
-        item.total >= INCIDENT_CLUSTER_MIN_REPORTS &&
-        item.barangays.length >= INCIDENT_CLUSTER_MIN_BARANGAYS
-    );
+    return Object.values(grouped)
+      .map((item) => ({
+        ...item,
+        thresholdLevel: getClusterThresholdLevel(item.total),
+      }))
+      .filter(
+        (item) =>
+          item.thresholdLevel &&
+          item.total >= INCIDENT_CLUSTER_MIN_REPORTS &&
+          item.barangays.length >= INCIDENT_CLUSTER_MIN_BARANGAYS
+      );
   }, [homepageBarangays, incidentBarangayCounts]);
 
   useEffect(() => {
     if (typeof addNotification !== "function") return;
+    if (!incidentClusterWarnings.length) return;
 
-    incidentClusterWarnings.forEach((cluster) => {
-      const key = `${cluster.category}:${cluster.barangays
-        .map((barangay) => barangay.id)
-        .sort()
-        .join("|")}`;
+    let cancelled = false;
 
-      if (clusterAlertedRef.current.has(key)) return;
-      clusterAlertedRef.current.add(key);
+    async function checkClusterNotifications() {
+      for (const cluster of incidentClusterWarnings) {
+        const check = await shouldNotifyCluster(cluster);
+        if (cancelled || !check.key) continue;
+        if (clusterNotificationInFlightRef.current.has(check.key)) continue;
+        if (!check.shouldNotify) continue;
 
-      const categoryLabel = formatIncidentType(cluster.category).toLowerCase();
-      const message =
-        cluster.category === "flood"
-          ? "Multiple nearby barangays have reported flooding. Stay alert."
-          : `${cluster.barangays.length} barangays reported the same incident nearby. Be careful.`;
+        clusterNotificationInFlightRef.current.add(check.key);
 
-      addNotification({
-        type: "nearby_repeated_incident",
-        title: "Clustered incident reports",
-        message,
-        icon: getIncidentCategoryIcon(cluster.category),
-        notificationType: "danger",
-        soundType: "danger",
-        sourceLabel: "Incident Alert",
-        official: true,
-        incidentCluster: {
-          category: categoryLabel,
-          total: cluster.total,
-          barangays: cluster.barangays.map((item) => item.label),
-        },
-      });
-    });
+        const categoryLabel = formatIncidentType(cluster.category).toLowerCase();
+        const message =
+          cluster.category === "flood"
+            ? "Multiple nearby barangays have reported flooding. Stay alert."
+            : `${cluster.barangays.length} barangays reported the same incident nearby. Be careful.`;
+
+        addNotification({
+          type: "nearby_repeated_incident",
+          title: "Clustered incident reports",
+          message,
+          icon: getIncidentCategoryIcon(cluster.category),
+          notificationType: "danger",
+          soundType: "danger",
+          sourceLabel: "Incident Alert",
+          official: true,
+          incidentCluster: {
+            category: categoryLabel,
+            total: cluster.total,
+            thresholdLevel: check.thresholdLevel,
+            barangays: cluster.barangays.map((item) => item.label),
+          },
+        });
+        await markClusterNotificationShown(check.key);
+      }
+    }
+
+    checkClusterNotifications();
+
+    return () => {
+      cancelled = true;
+    };
   }, [addNotification, incidentClusterWarnings]);
 
 const selectedBarangayIncidents = useMemo(() => {
@@ -2454,18 +2578,69 @@ const handleSelectBarangay = useCallback(
 const visibleIncidentMarkers = useMemo(() => {
   if (!(isIncident && selectedBarangay)) return normalizedIncidents;
 
+  const normalizedSelectedBarangay = String(selectedBarangay.label || "")
+    .trim()
+    .toLowerCase();
+
   return normalizedIncidents.filter((incident) => {
     const point = {
       latitude: incident.latitude,
       longitude: incident.longitude,
     };
 
-    return isPointInBarangay(point, selectedBarangay.feature);
+    if (isPointInBarangay(point, selectedBarangay.feature)) {
+      return true;
+    }
+
+    const incidentBarangay = String(incident?.barangay || "").trim().toLowerCase();
+    const locationText = String(incident?.location || "").trim().toLowerCase();
+
+    return (
+      normalizedSelectedBarangay &&
+      (incidentBarangay === normalizedSelectedBarangay ||
+        locationText.includes(normalizedSelectedBarangay))
+    );
   });
 }, [isIncident, normalizedIncidents, selectedBarangay]);
 
 const shouldShowIncidentMarkers =
-  isIncident && showIncidentMarkers && visibleIncidentMarkers.length > 0;
+  isIncident && visibleIncidentMarkers.length > 0;
+
+  useEffect(() => {
+    if (!isIncident) return;
+
+    console.log(
+      "[incidents] marker coordinates:",
+      visibleIncidentMarkers.map((incident) => ({
+        id: incident?._id,
+        type: incident?.type,
+        barangay: incident?.barangay,
+        latitude: incident?.latitude,
+        longitude: incident?.longitude,
+      }))
+    );
+  }, [isIncident, visibleIncidentMarkers]);
+
+  const focusIncidentOnMap = useCallback(
+    (incident) => {
+      const latitude = Number(incident?.latitude);
+      const longitude = Number(incident?.longitude);
+
+      if (!isValidCoordinate(latitude, longitude)) return;
+
+      setPanelY(420);
+      mapRef.current?.animateToRegion(
+        {
+          latitude,
+          longitude,
+          latitudeDelta: 0.012,
+          longitudeDelta: 0.012,
+        },
+        320
+      );
+    },
+    [setPanelY]
+  );
 
   const incidentPointInsideJaen = useMemo(
     () =>
@@ -2993,13 +3168,19 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
 
     await postMultipart("/incident/register", formData);
 
-    const incidentsRes = await api.get("/incident/getIncidents");
-    const freshIncidents = Array.isArray(incidentsRes?.data)
-      ? incidentsRes.data
-      : [];
+    if (typeof refreshIncidents === "function") {
+      await refreshIncidents();
+    } else {
+      const incidentsRes = await api.get("/incident/getIncidents");
+      const freshIncidents = Array.isArray(incidentsRes?.data)
+        ? incidentsRes.data
+        : [];
 
-    if (typeof setIncidents === "function") {
-      setIncidents(freshIncidents);
+      if (typeof setIncidents === "function") {
+        setIncidents(
+          freshIncidents.filter((incident) => isPublicIncident(incident?.status))
+        );
+      }
     }
 
     Alert.alert("Incident Submitted", "The report has been recorded.");
@@ -3034,6 +3215,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
   incidentDraft,
   incidentDebugMode,
   incidentImage,
+  refreshIncidents,
   setIncidents,
   user?.phone,
   user?.username,
@@ -3231,7 +3413,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
     </SafeMarker>
   ))}
 {shouldShowIncidentMarkers &&
-  visibleIncidentMarkers.map((incident) => {
+  visibleIncidentMarkers.map((incident, index) => {
     const latitude = Number(incident?.latitude);
     const longitude = Number(incident?.longitude);
 
@@ -3239,13 +3421,18 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
 
     return (
       <Marker
-        key={incident._id || `${latitude}-${longitude}`}
+        key={`incident-marker-${incident._id || `${latitude}-${longitude}-${index}`}`}
         coordinate={{ latitude, longitude }}
         anchor={{ x: 0.5, y: 1 }}
         zIndex={120}
-        tracksViewChanges={false}
+        tracksViewChanges
+        title={safeDisplayText(incident?.type, "Incident")}
+        description={safeDisplayText(
+          incident?.location || incident?.barangay,
+          "Reported location"
+        )}
       >
-        <IncidentMapMarker level={incident?.level} />
+        <IncidentMapMarker level={incident?.level} type={incident?.type} />
       </Marker>
     );
   })}
@@ -3351,6 +3538,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
               : ""
           }
           incidents={selectedBarangayIncidents}
+          onIncidentPress={focusIncidentOnMap}
           selectedBarangay={selectedBarangay}
           onClearSelectedBarangay={clearSelectedBarangay}
           barangayCount={displayedBarangayCount}
@@ -3431,6 +3619,7 @@ function ModulePanel({
   incidentCount,
   incidentTopType,
   incidents,
+  onIncidentPress,
   selectedBarangay,
   onClearSelectedBarangay,
   barangayCount,
@@ -3482,7 +3671,7 @@ function ModulePanel({
   handleSelectBarangay,
  
 }) {
-  const [incidentPanelTab, setIncidentPanelTab] = useState("report");
+  const [incidentPanelTab, setIncidentPanelTab] = useState("reports");
   const [evacFilter, setEvacFilter] = useState("nearest");
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const lastNavigationPanelY = useRef(NAV_PANEL_DEFAULT_OFFSET);
@@ -4145,7 +4334,7 @@ function ModulePanel({
           </View>
           <View style={styles.incidentBarangayCopy}>
             <Text style={styles.sectionLabel}>{selectedBarangay ? "Reports in barangay" : "Recent reports"}</Text>
-            <Text style={styles.panelNote}>{selectedBarangay ? "Only reports inside the selected barangay are shown." : "Showing the latest visible incident reports."}</Text>
+            <Text style={styles.panelNote}>{selectedBarangay ? "Only reports inside the selected barangay are shown." : "Showing the latest visible incident reports. Tap a report to center its marker."}</Text>
           </View>
         </View>
 
@@ -4157,7 +4346,11 @@ function ModulePanel({
           </View>
         ) : (
           safeArray(incidents).slice(0, 6).map((incident) => (
-            <IncidentListItem key={incident?._id || `${incident.latitude}-${incident.longitude}`} incident={incident} />
+            <IncidentListItem
+              key={incident?._id || `${incident.latitude}-${incident.longitude}`}
+              incident={incident}
+              onPress={() => onIncidentPress?.(incident)}
+            />
           ))
         )}
       </View>
@@ -6526,11 +6719,13 @@ barangayIncidentTooltipText: {
     marginBottom: 8,
   },
 
-  incidentSeverityDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 5,
+  incidentListIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 10,
   },
 
@@ -6540,10 +6735,31 @@ barangayIncidentTooltipText: {
   },
 
   incidentListTitle: {
+    flex: 1,
     color: "#10251B",
     fontSize: 13,
     fontWeight: "900",
     textTransform: "capitalize",
+  },
+
+  incidentListTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  incidentStatusChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    backgroundColor: "#ffffff",
+  },
+
+  incidentStatusText: {
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "uppercase",
   },
 
   incidentListMeta: {
@@ -6551,6 +6767,13 @@ barangayIncidentTooltipText: {
     color: "#516353",
     fontSize: 11,
     fontWeight: "800",
+  },
+
+  incidentListSubMeta: {
+    marginTop: 3,
+    color: "#7A877D",
+    fontSize: 10,
+    fontWeight: "700",
   },
 
   incidentListDescription: {

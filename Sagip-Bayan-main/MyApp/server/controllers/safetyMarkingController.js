@@ -143,27 +143,13 @@ async function getUniqueActiveDebugMarkers() {
     .sort({ updatedAt: -1 })
     .lean();
 
-  const markerUserIds = markers
-    .map((marker) => normalizeMarkerUserId(marker))
-    .filter((userId) => mongoose.Types.ObjectId.isValid(userId));
-  const shareEnabledUsers = await UserModel.find({
-    _id: { $in: markerUserIds },
-    shareSafetyLocation: true,
-  })
-    .select("_id")
-    .lean();
-  const shareEnabledIds = new Set(shareEnabledUsers.map((item) => String(item._id)));
-
   const seen = new Set();
   const duplicateIds = [];
   const uniqueMarkers = [];
 
   markers.forEach((marker) => {
     const userId = normalizeMarkerUserId(marker);
-    const isValidMarker =
-      userId &&
-      shareEnabledIds.has(userId) &&
-      isInsideJaen(marker.latitude, marker.longitude);
+    const isValidMarker = userId && isInsideJaen(marker.latitude, marker.longitude);
 
     if (!isValidMarker) {
       duplicateIds.push(marker._id);
@@ -204,7 +190,8 @@ exports.upsertDebugLocation = async (req, res) => {
     let latitude = toNumber(req.body?.latitude);
     let longitude = toNumber(req.body?.longitude);
 
-    console.log("[debug-markers] POST received:", {
+    console.log("[debug-location] current user:", userId);
+    console.log("[debug-location] POST received:", {
       userId,
       username: req.body?.username,
       latitude,
@@ -216,28 +203,10 @@ exports.upsertDebugLocation = async (req, res) => {
       return res.status(400).json({ message: "userId is required." });
     }
 
-    const user = await UserModel.findById(userId).select("shareSafetyLocation");
+    const user = await UserModel.findById(userId).select("_id");
 
     if (!user) {
       return res.status(404).json({ message: "User not found." });
-    }
-
-    if (user.shareSafetyLocation !== true) {
-      await SafetyDebugLocation.findOneAndUpdate(
-        { userId },
-        {
-          $set: {
-            debugMode: false,
-            updatedAt: new Date(),
-          },
-        },
-        { new: true }
-      );
-
-      return res.status(403).json({
-        message: "Debug Mode is ON, but location sharing is disabled.",
-        shareSafetyLocation: false,
-      });
     }
 
     let locationAdjusted = false;
@@ -250,7 +219,7 @@ exports.upsertDebugLocation = async (req, res) => {
     }
 
     if (locationAdjusted) {
-      console.log("[debug-markers] adjusted debug coordinate inside Jaen:", {
+      console.log("[debug-location] adjusted coordinate inside Jaen:", {
         userId,
         latitude,
         longitude,
@@ -281,7 +250,7 @@ exports.upsertDebugLocation = async (req, res) => {
 
     await getUniqueActiveDebugMarkers();
 
-    console.log("[debug-markers] saved marker:", {
+    console.log("[debug-location] saved to backend:", {
       userId: marker.userId,
       username: marker.username,
       latitude: marker.latitude,
@@ -305,16 +274,20 @@ exports.upsertDebugLocation = async (req, res) => {
 
 exports.getDebugLocations = async (_req, res) => {
   try {
-    const insideJaenMarkers = await getUniqueActiveDebugMarkers();
+    const users = await SafetyDebugLocation.find({ debugMode: true })
+      .sort({ updatedAt: -1 })
+      .lean();
 
+    console.log("[debug-markers] total:", users.length);
     console.log(
-      `[debug-markers] GET returning ${insideJaenMarkers.length} markers:`,
-      insideJaenMarkers.map((marker) => String(marker.userId))
+      "[debug-markers] returned users:",
+      users.map((marker) => ({
+        userId: marker.userId,
+        safetyStatus: marker.safetyStatus,
+      }))
     );
 
-    return res.status(200).json({
-      markers: insideJaenMarkers,
-    });
+    return res.status(200).json(users);
   } catch (err) {
     console.error("[safety-marking] fetch debug locations failed:", err);
     return res.status(500).json({
@@ -324,11 +297,58 @@ exports.getDebugLocations = async (_req, res) => {
   }
 };
 
+exports.updateSafetyStatus = async (req, res) => {
+  try {
+    const userId = sanitizeText(req.body?.userId, 80);
+    const safetyStatus = normalizeSafetyStatus(req.body?.safetyStatus);
+
+    if (!userId) {
+      return res.status(400).json({ message: "userId is required." });
+    }
+
+    const marker = await SafetyDebugLocation.findOneAndUpdate(
+      { userId },
+      {
+        $set: {
+          safetyStatus,
+          updatedAt: new Date(),
+        },
+      },
+      {
+        new: true,
+      }
+    ).lean();
+
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      await UserModel.findByIdAndUpdate(userId, {
+        $set: {
+          safetyStatus,
+          safetyUpdatedAt: new Date(),
+        },
+      });
+    }
+
+    console.log("[status updated]", userId, safetyStatus);
+
+    return res.status(200).json({
+      userId,
+      safetyStatus,
+      marker,
+    });
+  } catch (err) {
+    console.error("[safety-marking] update safety status failed:", err);
+    return res.status(500).json({
+      message: "Failed to update safety status.",
+      error: err.message,
+    });
+  }
+};
+
 exports.turnOffDebugLocation = async (req, res) => {
   try {
     const userId = sanitizeText(req.body?.userId || req.params?.userId, 80);
 
-    console.log("[debug-markers] OFF received:", { userId });
+    console.log("[debug-location] OFF received:", { userId });
 
     if (!userId) {
       return res.status(400).json({ message: "userId is required." });

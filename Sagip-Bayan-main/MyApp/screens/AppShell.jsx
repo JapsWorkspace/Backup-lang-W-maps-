@@ -25,6 +25,46 @@ import api from "../lib/api";
 
 const Stack = createNativeStackNavigator();
 const MAP_UI_SCREENS = new Set(["Map"]);
+const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
+
+function normalizeIncidentStatus(status) {
+  return String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isPublicIncident(status) {
+  return PUBLIC_INCIDENT_STATUSES.includes(normalizeIncidentStatus(status));
+}
+
+function getIncidentCoordinate(incident, keys) {
+  for (const key of keys) {
+    const value = key
+      .split(".")
+      .reduce((current, pathKey) => current?.[pathKey], incident);
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue)) return numberValue;
+  }
+
+  return NaN;
+}
+
+function hasValidIncidentCoordinates(incident) {
+  const latitude = getIncidentCoordinate(incident, ["latitude", "lat", "location.lat"]);
+  const longitude = getIncidentCoordinate(incident, ["longitude", "lng", "location.lng"]);
+
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180 &&
+    !(latitude === 0 && longitude === 0)
+  );
+}
 
 export default function AppShell() {
   const { theme } = useTheme();
@@ -42,6 +82,36 @@ export default function AppShell() {
 
   const [incidents, setIncidents] = useState([]);
 
+  const refreshIncidents = useCallback(async () => {
+    const res = await api.get("/incident/getIncidents");
+    const fetchedIncidents = Array.isArray(res.data) ? res.data : [];
+    const rawStatuses = fetchedIncidents.map((incident) => incident?.status);
+    const publicIncidents = fetchedIncidents.filter((incident) =>
+      isPublicIncident(incident?.status)
+    );
+    const invalidCoordinateIncidents = publicIncidents.filter(
+      (incident) => !hasValidIncidentCoordinates(incident)
+    );
+    const validMarkerCount = publicIncidents.length - invalidCoordinateIncidents.length;
+
+    console.log("[incidents] raw count:", fetchedIncidents.length);
+    console.log("[incidents] raw statuses:", rawStatuses);
+    console.log("[incidents] public visible count:", publicIncidents.length);
+    console.log(
+      "[incidents] invalid coordinates:",
+      invalidCoordinateIncidents.map((incident) => ({
+        id: incident?._id,
+        status: incident?.status,
+        latitude: incident?.latitude ?? incident?.lat ?? incident?.location?.lat,
+        longitude: incident?.longitude ?? incident?.lng ?? incident?.location?.lng,
+      }))
+    );
+    console.log("[incidents] valid marker count:", validMarkerCount);
+
+    setIncidents(publicIncidents);
+    return publicIncidents;
+  }, []);
+
   const [showFloodMap, setShowFloodMap] = useState(false);
   const [showEarthquakeHazard, setShowEarthquakeHazard] = useState(false);
 
@@ -54,14 +124,9 @@ export default function AppShell() {
     useCallback(() => {
       let mounted = true;
 
-      api
-        .get("/incident/getIncidents")
-        .then((res) => {
-          if (mounted && Array.isArray(res.data)) {
-            setIncidents(res.data);
-          }
-        })
-        .catch((err) => console.log(err));
+      refreshIncidents().catch((err) => {
+        if (mounted) console.log("[incidents] fetch failed:", err?.message || err);
+      });
 
       api
         .get("/evacs")
@@ -75,7 +140,7 @@ export default function AppShell() {
       return () => {
         mounted = false;
       };
-    }, [])
+    }, [refreshIncidents])
   );
 
   const mapContextValue = useMemo(
@@ -107,6 +172,7 @@ export default function AppShell() {
 
       incidents,
       setIncidents,
+      refreshIncidents,
 
       showFloodMap,
       setShowFloodMap,
@@ -127,6 +193,7 @@ export default function AppShell() {
       activeRoute,
       travelMode,
       incidents,
+      refreshIncidents,
       showFloodMap,
       showEarthquakeHazard,
       isBottomNavInteracting,

@@ -181,7 +181,9 @@ app.get("/api/mobile-debug", async (req, res) => {
 
   try {
     const [incidentCount, evacCount, guidelineCount] = await Promise.all([
-      mongoose.connection.db.collection("incidents").countDocuments({ status: "accepted" }),
+      mongoose.connection.db.collection("incidents").countDocuments({
+        status: { $in: [/^reported$/i, /^on[ _-]+process$/i, /^resolved$/i] },
+      }),
       mongoose.connection.db.collection("evacplaces").countDocuments({ isArchived: { $ne: true } }),
       mongoose.connection.db.collection("guidelines").countDocuments({ status: "published" }),
     ]);
@@ -196,7 +198,7 @@ app.get("/api/mobile-debug", async (req, res) => {
       responseTimeMs: Date.now() - startedAt,
       checks,
       counts: {
-        acceptedIncidents: incidentCount,
+        publicIncidents: incidentCount,
         evacuationCenters: evacCount,
         publishedGuidelines: guidelineCount,
       },

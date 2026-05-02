@@ -76,6 +76,7 @@ export const MapContext = createContext({
   setIncidents: () => {
     throw new Error("setIncidents not provided");
   },
+  refreshIncidents: async () => [],
 
   /* =========================
      HAZARD TOGGLES

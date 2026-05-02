@@ -7,10 +7,17 @@ export const LAN_IP = "192.168.1.97";
 export const PORT = 8000;
 export const NGROK_URL = ""; // Example: "https://xxxx.ngrok.app"
 export const HEALTH_PATH = "/health";
-export const PROD_BASE = "https://YOUR-PROD-API.com";
+export const PROD_BASE = "https://gaganadapat.onrender.com";
 
 /**
  * Leave empty for auto-detect.
+ *
+ * The admin website defaults to PROD_BASE, so dev mobile should try the same
+ * backend before a local LAN server. Otherwise public reports can exist on
+ * the admin database while mobile reads an empty local database.
+ *
+ * To force a local backend while developing server code:
+ * const FORCE_BASE = `http://${LAN_IP}:${PORT}`;
  *
  * For physical phone only, you may force:
  * const FORCE_BASE = `http://${LAN_IP}:${PORT}`;
@@ -20,6 +27,7 @@ export const PROD_BASE = "https://YOUR-PROD-API.com";
  */
 const FORCE_BASE = "";
 
+const remoteBase = PROD_BASE;
 const physicalDeviceBase = `http://${LAN_IP}:${PORT}`;
 const emulatorBase = `http://10.0.2.2:${PORT}`;
 const localhostBase = `http://localhost:${PORT}`;
@@ -29,8 +37,9 @@ const candidatesDev =
     ? [
         ...(FORCE_BASE ? [FORCE_BASE] : []),
         ...(NGROK_URL ? [NGROK_URL] : []),
+        remoteBase,
 
-        // Put LAN IP first so physical phones work.
+        // Local fallback for testing server changes on the same network.
         // Android emulator can also often reach this if both are on same network.
         physicalDeviceBase,
 
@@ -40,6 +49,7 @@ const candidatesDev =
     : [
         ...(FORCE_BASE ? [FORCE_BASE] : []),
         ...(NGROK_URL ? [NGROK_URL] : []),
+        remoteBase,
         localhostBase,
         physicalDeviceBase,
       ];

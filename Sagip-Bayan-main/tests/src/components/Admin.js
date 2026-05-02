@@ -36,7 +36,7 @@ export default function Admin() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await axios.get('http://localhost:8000/incident/getIncidents');
+        const res = await axios.get('http://localhost:8000/incident/getIncidents?includeAll=true');
         setIncidents(res.data);
       } catch (err) {
         console.error(err);
