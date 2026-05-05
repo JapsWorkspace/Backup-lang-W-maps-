@@ -341,6 +341,21 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
 
+    // ✅ Remember when the user cleared notifications.
+    // This prevents old guideline/announcement notifications from coming back.
+    notificationClearedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // ✅ Remember cleared guideline/announcement dedupe keys.
+    // This prevents syncRecentGuidelineNotificationsForUser() and
+    // syncRecentAnnouncementNotificationsForUser() from recreating old cleared posts.
+    clearedNotificationDedupeKeys: {
+      type: [String],
+      default: [],
+    },
+
     safetyStatus: {
       type: String,
       enum: ["SAFE", "NOT_SAFE", "UNKNOWN"],
@@ -432,6 +447,8 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ barangay: 1, isArchived: 1 });
 userSchema.index({ "notifications.dedupeKey": 1 });
+userSchema.index({ notificationClearedAt: 1 });
+userSchema.index({ clearedNotificationDedupeKeys: 1 });
 userSchema.index({
   "notifications.type": 1,
   "notifications.referenceId": 1,

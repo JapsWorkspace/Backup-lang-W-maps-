@@ -2,6 +2,8 @@ const UserModel = require("../models/User");
 const SafetyDebugLocation = require("../models/SafetyDebugLocation");
 const PostingGuideline = require("../models/Guidelines");
 const Announcement = require("../models/Announcement");
+const Notification = require("../models/Notification");
+const mongoose = require("mongoose");
 const crypto = require("crypto");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const sendOTP = require("../utils/sendOTP");
@@ -10,6 +12,11 @@ const bcrypt = require("bcryptjs");
 
 const GUIDELINE_NOTIFICATION_LOOKBACK_DAYS = 30;
 const ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS = 30;
+const DANGER_NOTIFICATION_TYPES = [
+  "nearby_incident",
+  "nearby_repeated_incident",
+  "barangay_incident_danger",
+];
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -88,12 +95,108 @@ function buildAnnouncementNotification(announcement) {
   };
 }
 
+function toPlainNotification(item) {
+  return typeof item?.toObject === "function" ? item.toObject() : item;
+}
+
+function getActionUserId(item) {
+  const value = item?.user ?? item;
+  if (value?._id) return String(value._id);
+  return value == null ? "" : String(value);
+}
+
+function hasUserAction(items, userId) {
+  const userIdText = String(userId || "");
+  return Array.isArray(items) && items.some((item) => getActionUserId(item) === userIdText);
+}
+
+function normalizeCollectionNotification(notification, userId) {
+  const type = notification?.type || "system";
+  const read = hasUserAction(notification?.readBy, userId);
+
+  return {
+    _id: String(notification._id),
+    id: String(notification._id),
+    type,
+    title: notification.title || "System update",
+    message: notification.message || "There is a new update.",
+    module: notification.module || null,
+    priority: notification.priority || "normal",
+    notificationType: notification.notificationType || "normal",
+    referenceId: notification.referenceId || notification.metadata?.incidentId || null,
+    referenceModel: notification.referenceModel || null,
+    incidentId: notification.incidentId || notification.metadata?.incidentId || null,
+    recipientUser: notification.recipientUser || null,
+    recipientUserModel: notification.recipientUserModel || null,
+    metadata: notification.metadata || {},
+    dedupeKey: notification.dedupeKey || "",
+    read,
+    isRead: read,
+    createdAt: notification.createdAt || new Date(),
+    sourceLabel:
+      notification.module === "incident"
+        ? "Incident Alert"
+        : notification.senderName || "System",
+    official: true,
+    soundType: DANGER_NOTIFICATION_TYPES.includes(String(type).toLowerCase())
+      ? "danger"
+      : "notification",
+  };
+}
+
+function getNotificationDedupeKeys(notification) {
+  const keys = [];
+  const id = notification?._id || notification?.id;
+  const dedupeKey = notification?.dedupeKey;
+  const referenceId = notification?.referenceId || notification?.incidentId;
+
+  if (id) keys.push(`id:${String(id)}`);
+  if (dedupeKey) keys.push(`dedupe:${String(dedupeKey)}`);
+  if (notification?.type && referenceId) {
+    keys.push(`ref:${String(notification.type)}:${String(referenceId)}`);
+  }
+
+  if (!keys.length) {
+    keys.push(
+      `fallback:${String(notification?.type || "system")}:${String(
+        notification?.createdAt || ""
+      )}:${String(notification?.message || "")}`
+    );
+  }
+
+  return keys;
+}
+
+function mergeNotifications(notifications) {
+  const seen = new Set();
+  const merged = [];
+
+  notifications.forEach((notification) => {
+      const keys = getNotificationDedupeKeys(notification);
+      if (keys.some((key) => seen.has(key))) return;
+
+      keys.forEach((key) => seen.add(key));
+      merged.push(notification);
+    });
+
+  return merged.sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
+}
+
 async function syncRecentGuidelineNotificationsForUser(user) {
-  const existingDedupeKeys = new Set(
-    (user.notifications || [])
+  const clearedAt = user.notificationClearedAt
+    ? new Date(user.notificationClearedAt)
+    : null;
+
+  const existingDedupeKeys = new Set([
+    ...(user.notifications || [])
       .map((item) => String(item?.dedupeKey || ""))
-      .filter(Boolean)
-  );
+      .filter(Boolean),
+
+    ...(user.clearedNotificationDedupeKeys || [])
+      .map((key) => String(key || ""))
+      .filter(Boolean),
+  ]);
+
   const cutoff = new Date(
     Date.now() - GUIDELINE_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
   );
@@ -113,7 +216,21 @@ async function syncRecentGuidelineNotificationsForUser(user) {
   const missingNotifications = publishedGuidelines
     .filter((guideline) => {
       const dedupeKey = `guideline:${guideline._id}:published`;
-      return !existingDedupeKeys.has(dedupeKey);
+
+      if (existingDedupeKeys.has(dedupeKey)) return false;
+
+      if (clearedAt) {
+        const publishedTime = new Date(
+          guideline.publishedNotificationSentAt ||
+            guideline.updatedAt ||
+            guideline.createdAt ||
+            0
+        );
+
+        if (publishedTime <= clearedAt) return false;
+      }
+
+      return true;
     })
     .map(buildGuidelineNotification);
 
@@ -121,6 +238,8 @@ async function syncRecentGuidelineNotificationsForUser(user) {
     userId: String(user._id),
     publishedGuidelines: publishedGuidelines.length,
     missingGuidelineNotifications: missingNotifications.length,
+    notificationClearedAt: user.notificationClearedAt || null,
+    clearedKeys: user.clearedNotificationDedupeKeys?.length || 0,
   });
 
   if (!missingNotifications.length) {
@@ -134,17 +253,24 @@ async function syncRecentGuidelineNotificationsForUser(user) {
     userId: String(user._id),
     count: missingNotifications.length,
   });
-  console.log("[notifications] notification type", "guideline");
 
   return user;
 }
-
 async function syncRecentAnnouncementNotificationsForUser(user) {
-  const existingDedupeKeys = new Set(
-    (user.notifications || [])
+  const clearedAt = user.notificationClearedAt
+    ? new Date(user.notificationClearedAt)
+    : null;
+
+  const existingDedupeKeys = new Set([
+    ...(user.notifications || [])
       .map((item) => String(item?.dedupeKey || ""))
-      .filter(Boolean)
-  );
+      .filter(Boolean),
+
+    ...(user.clearedNotificationDedupeKeys || [])
+      .map((key) => String(key || ""))
+      .filter(Boolean),
+  ]);
+
   const cutoff = new Date(
     Date.now() - ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
   );
@@ -164,7 +290,21 @@ async function syncRecentAnnouncementNotificationsForUser(user) {
   const missingNotifications = publishedAnnouncements
     .filter((announcement) => {
       const dedupeKey = `announcement:${announcement._id}:published`;
-      return !existingDedupeKeys.has(dedupeKey);
+
+      if (existingDedupeKeys.has(dedupeKey)) return false;
+
+      if (clearedAt) {
+        const publishedTime = new Date(
+          announcement.publishedNotificationSentAt ||
+            announcement.updatedAt ||
+            announcement.createdAt ||
+            0
+        );
+
+        if (publishedTime <= clearedAt) return false;
+      }
+
+      return true;
     })
     .map(buildAnnouncementNotification);
 
@@ -172,6 +312,8 @@ async function syncRecentAnnouncementNotificationsForUser(user) {
     userId: String(user._id),
     publishedAnnouncements: publishedAnnouncements.length,
     missingAnnouncementNotifications: missingNotifications.length,
+    notificationClearedAt: user.notificationClearedAt || null,
+    clearedKeys: user.clearedNotificationDedupeKeys?.length || 0,
   });
 
   if (!missingNotifications.length) {
@@ -185,7 +327,6 @@ async function syncRecentAnnouncementNotificationsForUser(user) {
     userId: String(user._id),
     count: missingNotifications.length,
   });
-  console.log("[notifications] notification type", "announcement");
 
   return user;
 }
@@ -876,36 +1017,68 @@ const getUserNotifications = async (req, res) => {
     await syncRecentGuidelineNotificationsForUser(user);
     await syncRecentAnnouncementNotificationsForUser(user);
 
-    const notifications = Array.isArray(user.notifications)
-      ? [...user.notifications].sort(
-          (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
-        )
+    const embeddedNotifications = Array.isArray(user.notifications)
+      ? user.notifications.map(toPlainNotification)
       : [];
+    const now = new Date();
+    const userObjectId = new mongoose.Types.ObjectId(String(user._id));
+    const userIdText = String(userObjectId);
 
-    const types = notifications.map((item) => item.type);
-    const guidelineCount = notifications.filter(
-      (item) => String(item?.type || "").toLowerCase() === "guideline"
-    ).length;
-    const announcementCount = notifications.filter(
-      (item) => String(item?.type || "").toLowerCase() === "announcement"
-    ).length;
-    const incidentApprovedCount = notifications.filter(
-      (item) => String(item?.type || "").toLowerCase() === "incident_approved"
-    ).length;
+    const collectionNotifications = await Notification.find({
+      $and: [
+        {
+          $or: [
+            { recipientUser: userObjectId },
+            { recipientUser: req.params.id },
+            { recipientRole: "all" },
+          ],
+        },
+        {
+          $or: [
+            { expiresAt: null },
+            { expiresAt: { $exists: false } },
+            { expiresAt: { $gt: now } },
+          ],
+        },
+        {
+          $or: [
+            { archivedBy: { $exists: false } },
+            {
+              archivedBy: {
+                $not: {
+                  $elemMatch: { user: userObjectId },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .lean();
 
-    console.log("[notifications] fetch storage:", {
-      userId: String(req.params.id || ""),
+    const normalizedCollectionNotifications = collectionNotifications.map((item) =>
+      normalizeCollectionNotification(item, userIdText)
+    );
+    const mergedNotifications = mergeNotifications([
+      ...normalizedCollectionNotifications,
+      ...embeddedNotifications,
+    ]);
+    const types = mergedNotifications.map((item) => item.type);
+
+    console.log("[notifications] merged fetch", {
+      userId: String(user._id),
       dbName: UserModel.db?.name || "",
-      notificationCollection: UserModel.collection?.name || "users",
-      notificationPath: "users.notifications",
-      total: notifications.length,
-      incidentApprovedCount,
+      embeddedCount: embeddedNotifications.length,
+      collectionCount: collectionNotifications.length,
+      mergedCount: mergedNotifications.length,
+      incidentApprovedCount: mergedNotifications.filter(
+        (item) => String(item?.type || "").toLowerCase() === "incident_approved"
+      ).length,
+      types,
     });
-    console.log("[notifications] types:", types);
-    console.log("[notifications] guideline notifications:", guidelineCount);
-    console.log("[notifications] announcement notifications:", announcementCount);
 
-    return res.json(notifications);
+    return res.json(mergedNotifications);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Server error" });
@@ -929,28 +1102,119 @@ const markNotificationsRead = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const userObjectId = new mongoose.Types.ObjectId(String(user._id));
+
+    await Notification.updateMany(
+      {
+        $and: [
+          {
+            $or: [
+              { recipientUser: userObjectId },
+              { recipientUser: req.params.id },
+              { recipientRole: "all" },
+            ],
+          },
+          {
+            readBy: {
+              $not: {
+                $elemMatch: {
+                  user: userObjectId,
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        $push: {
+          readBy: {
+            user: userObjectId,
+            role: "user",
+            readAt: new Date(),
+          },
+        },
+      }
+    );
+
     return res.json({ message: "Notifications marked as read." });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Server error" });
   }
 };
-
 const clearNotifications = async (req, res) => {
   try {
-    const user = await UserModel.findByIdAndUpdate(
-      req.params.id,
-      { $set: { notifications: [] } },
-      { new: true }
-    ).select("_id");
+    const user = await UserModel.findById(req.params.id).select(
+      "notifications clearedNotificationDedupeKeys notificationClearedAt"
+    );
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const userObjectId = new mongoose.Types.ObjectId(String(user._id));
+
+    const existingDedupeKeys = Array.isArray(user.notifications)
+      ? user.notifications
+          .map((item) => String(item?.dedupeKey || ""))
+          .filter(Boolean)
+      : [];
+
+    const mergedClearedKeys = Array.from(
+      new Set([
+        ...(user.clearedNotificationDedupeKeys || []),
+        ...existingDedupeKeys,
+      ])
+    );
+
+    user.notifications = [];
+    user.clearedNotificationDedupeKeys = mergedClearedKeys;
+    user.notificationClearedAt = new Date();
+
+    await user.save();
+
+    await Notification.updateMany(
+      {
+        $and: [
+          {
+            $or: [
+              { recipientUser: userObjectId },
+              { recipientUser: req.params.id },
+              { recipientRole: "all" },
+            ],
+          },
+          {
+            archivedBy: {
+              $not: {
+                $elemMatch: {
+                  user: userObjectId,
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        $push: {
+          archivedBy: {
+            user: userObjectId,
+            role: "user",
+            archivedAt: new Date(),
+          },
+        },
+      }
+    );
+
+    console.log("[notifications] cleared", {
+      userId: String(user._id),
+      clearedEmbeddedKeys: existingDedupeKeys.length,
+      totalClearedKeys: mergedClearedKeys.length,
+      notificationClearedAt: user.notificationClearedAt,
+    });
+
     return res.json({ message: "Notifications cleared." });
   } catch (err) {
-    console.error(err);
+    console.error("Clear notifications error:", err);
     return res.status(500).json({ message: "Server error" });
   }
 };
