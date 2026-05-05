@@ -3,6 +3,8 @@ const Announcement = require("../models/Announcement");
 const UserModel = require("../models/User");
 const cloudinary = require("../config/cloudinary");
 
+const ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS = 30;
+
 function sanitizeText(value, max = 240) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -97,9 +99,82 @@ function buildPublishedAnnouncementNotification(announcement) {
   };
 }
 
+async function ensureAnnouncementNotificationsForUser(userId, announcements = []) {
+  if (!isValidObjectId(userId) || !Array.isArray(announcements) || !announcements.length) {
+    return;
+  }
+
+  const cutoff = new Date(
+    Date.now() - ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  );
+  const recentPublishedAnnouncements = announcements.filter((announcement) => {
+    const status = String(announcement?.status || "").toLowerCase();
+    const timestamp = new Date(
+      announcement?.publishedNotificationSentAt ||
+        announcement?.updatedAt ||
+        announcement?.createdAt ||
+        0
+    ).getTime();
+
+    return status === "published" && !Number.isNaN(timestamp) && timestamp >= cutoff.getTime();
+  });
+
+  if (!recentPublishedAnnouncements.length) {
+    return;
+  }
+
+  const user = await UserModel.findById(userId).select("notifications");
+  if (!user) {
+    console.log("[notifications] announcement sync skipped", {
+      reason: "user_not_found",
+      userId: String(userId),
+    });
+    return;
+  }
+
+  const existingDedupeKeys = new Set(
+    (user.notifications || [])
+      .map((item) => String(item?.dedupeKey || ""))
+      .filter(Boolean)
+  );
+  const missingNotifications = recentPublishedAnnouncements
+    .filter((announcement) => {
+      const dedupeKey = `announcement:${announcement._id}:published`;
+      return !existingDedupeKeys.has(dedupeKey);
+    })
+    .map(buildPublishedAnnouncementNotification);
+
+  console.log("[notifications] announcement sync check", {
+    userId: String(userId),
+    publishedAnnouncements: recentPublishedAnnouncements.length,
+    missingAnnouncementNotifications: missingNotifications.length,
+  });
+
+  if (!missingNotifications.length) {
+    return;
+  }
+
+  user.notifications.push(...missingNotifications);
+  await user.save();
+
+  console.log("[notifications] announcement notification created:", {
+    userId: String(userId),
+    count: missingNotifications.length,
+  });
+  console.log("[notifications] notification type", "announcement");
+}
+
 async function notifyPublishedAnnouncement(announcement, action = "published") {
   if (String(announcement?.status || "").toLowerCase() !== "published") return;
-  if (announcement?.publishedNotificationSent) return;
+  if (announcement?.publishedNotificationSent) {
+    console.log("[announcements] shouldNotify:", false, {
+      reason: "already_sent",
+      announcementId: String(announcement._id),
+      title: announcement.title,
+      status: announcement.status,
+    });
+    return;
+  }
 
   const dedupeKey = `announcement:${announcement._id}:published`;
   const notification = buildPublishedAnnouncementNotification(announcement);
@@ -128,6 +203,7 @@ async function notifyPublishedAnnouncement(announcement, action = "published") {
     matched: result?.matchedCount,
     modified: result?.modifiedCount,
   });
+  console.log("[notifications] notification type", "announcement");
 }
 
 async function uploadAnnouncementFiles(files = []) {
@@ -189,6 +265,10 @@ const getAnnouncements = async (req, res) => {
       createdAt: -1,
       updatedAt: -1,
     });
+
+    if (filter.status === "published" && isValidObjectId(userId)) {
+      await ensureAnnouncementNotificationsForUser(userId, announcements);
+    }
 
     res
       .status(200)

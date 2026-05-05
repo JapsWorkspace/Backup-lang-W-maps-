@@ -16,35 +16,17 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
-import { Picker } from "@react-native-picker/picker";
 
 import { getMyDonations, submitDonation as submitDonationApi } from "../lib/donationApi";
 import { UserContext } from "./UserContext";
 import { ThemeContext } from "./contexts/ThemeContext";
 import useFormAutoScroll from "./hooks/useFormAutoScroll";
 import {
-  DONATION_DESCRIPTION_MAX_LENGTH,
-  getPhoneError,
-  sanitizeAlphaNumericText,
   sanitizeAmount,
-  sanitizeIncidentText,
-  sanitizeName,
-  sanitizePhoneLocal,
-  sanitizeQuantity,
   sanitizeReferenceText,
 } from "./utils/validation";
 
 const OFFLINE_QUEUE_KEY = "sagip_bayan_donation_queue_v2";
-
-const ITEM_CATEGORIES = [
-  ["clothes", "Clothes"],
-  ["food", "Food"],
-  ["appliances", "Appliances"],
-  ["furniture", "Furniture"],
-  ["medicine", "Medicine"],
-  ["essentials", "Essentials"],
-  ["other", "Other"],
-];
 
 const STATUS_META = {
   pending: { label: "Pending", color: "#B45309", bg: "#FEF3C7" },
@@ -56,18 +38,7 @@ const STATUS_META = {
 
 const INITIAL_FORM = {
   amount: "",
-  paymentMethod: "GCash",
   gcashReferenceNumber: "",
-  gcashSender: "",
-  category: "food",
-  itemName: "",
-  quantity: "",
-  description: "",
-  fulfillmentMethod: "drop_off",
-  donorName: "",
-  donorPhone: "",
-  location: "",
-  barangay: "",
 };
 
 export default function DonationScreen({ navigation }) {
@@ -75,7 +46,6 @@ export default function DonationScreen({ navigation }) {
   const { theme } = useContext(ThemeContext);
   const styles = useMemo(() => createStyles(theme), [theme]);
 
-  const [donationType, setDonationType] = useState("monetary");
   const [activeTab, setActiveTab] = useState("form");
   const [form, setForm] = useState(INITIAL_FORM);
   const [photo, setPhoto] = useState(null);
@@ -160,49 +130,18 @@ export default function DonationScreen({ navigation }) {
 
   const buildPayload = () => {
     const nextErrors = {};
+    const cleanAmount = sanitizeAmount(form.amount);
+    const amount = Number(cleanAmount);
+    const gcashReferenceNumber = sanitizeReferenceText(form.gcashReferenceNumber);
 
-    if (donationType === "monetary") {
-      const cleanAmount = sanitizeAmount(form.amount);
-      const amount = Number(cleanAmount);
-      if (!Number.isFinite(amount) || amount <= 0) {
-        nextErrors.amount = "Enter a valid donation amount.";
-      }
-      const gcashReferenceNumber = sanitizeReferenceText(form.gcashReferenceNumber);
-      const gcashSender = sanitizeAlphaNumericText(form.gcashSender, 80);
-
-      if (!gcashReferenceNumber) nextErrors.gcashReferenceNumber = "Reference number is required.";
-      if (!gcashSender) nextErrors.gcashSender = "Sender name or number is required.";
-
-      if (Object.keys(nextErrors).length) {
-        setErrors(nextErrors);
-        throw new Error(Object.values(nextErrors)[0]);
-      }
-
-      return {
-        donationType,
-        donorUserId: user?._id || "",
-        amount: String(amount),
-        paymentMethod: "GCash",
-        gcashReferenceNumber,
-        gcashSender,
-        referenceNumber: gcashReferenceNumber,
-        description: "Monetary donation via GCash.",
-      };
+    if (!Number.isFinite(amount) || amount <= 0) {
+      nextErrors.amount = "Enter a valid donation amount.";
     }
-
-    const donorName = sanitizeName(form.donorName) || user?.name || user?.username || "";
-    const donorPhone = sanitizePhoneLocal(form.donorPhone || user?.phone || "");
-    const barangay = sanitizeAlphaNumericText(form.barangay || user?.barangay || "", 80);
-    const location = sanitizeIncidentText(form.location, 160);
-    const quantity = Number(sanitizeQuantity(form.quantity));
-    const itemName = sanitizeAlphaNumericText(form.itemName, 80);
-    const description = sanitizeIncidentText(form.description, DONATION_DESCRIPTION_MAX_LENGTH);
-    if (form.donorPhone && getPhoneError(form.donorPhone)) {
-      nextErrors.donorPhone = getPhoneError(form.donorPhone);
+    if (!gcashReferenceNumber) {
+      nextErrors.gcashReferenceNumber = "Reference number is required.";
     }
-    if (!itemName) nextErrors.itemName = "Item name is required.";
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      nextErrors.quantity = "Enter a valid item quantity.";
+    if (!photo?.uri) {
+      nextErrors.photo = "Upload your GCash receipt or screenshot.";
     }
 
     if (Object.keys(nextErrors).length) {
@@ -211,17 +150,13 @@ export default function DonationScreen({ navigation }) {
     }
 
     return {
-      donationType,
+      donationType: "monetary",
       donorUserId: user?._id || "",
-      donorName,
-      donorPhone: donorPhone ? `0${donorPhone}` : "",
-      barangay,
-      location,
-      category: form.category,
-      itemName,
-      quantity: String(quantity),
-      description,
-      fulfillmentMethod: form.fulfillmentMethod,
+      amount: String(amount),
+      paymentMethod: "GCash",
+      gcashReferenceNumber,
+      referenceNumber: gcashReferenceNumber,
+      description: "GCash monetary donation.",
     };
   };
 
@@ -303,21 +238,9 @@ export default function DonationScreen({ navigation }) {
         <View style={styles.mainTabs}>
           <MainTabButton
             icon="wallet-outline"
-            label="Monetary Donation"
-            active={activeTab === "form" && donationType === "monetary"}
+            label="GCash Donation"
+            active={activeTab === "form"}
             onPress={() => {
-              setDonationType("monetary");
-              setActiveTab("form");
-              setPhoto(null);
-            }}
-            styles={styles}
-          />
-          <MainTabButton
-            icon="cube-outline"
-            label="Non-Monetary Donation"
-            active={activeTab === "form" && donationType === "non_monetary"}
-            onPress={() => {
-              setDonationType("non_monetary");
               setActiveTab("form");
             }}
             styles={styles}
@@ -336,33 +259,21 @@ export default function DonationScreen({ navigation }) {
 
         {activeTab === "form" ? (
           <View style={styles.panel}>
-            <Text style={styles.panelTitle}>
-              {donationType === "monetary" ? "Monetary Donation" : "Item Donation"}
+            <Text style={styles.panelTitle}>GCash Donation</Text>
+            <Text style={styles.panelSubtitle}>
+              Submit the amount, GCash reference number, and receipt screenshot.
             </Text>
-            {donationType !== "monetary" && (
-              <Text style={styles.panelSubtitle}>
-                Describe the item and how MDRRMO can receive it.
-              </Text>
-            )}
 
-            {donationType === "monetary" ? (
-            <MonetaryFields form={form} updateField={updateField} errors={errors} registerInput={registerInput} scrollToInput={scrollToInput} styles={styles} />
-          ) : (
-            <ItemFields
+            <MonetaryFields
               form={form}
               updateField={updateField}
               errors={errors}
               registerInput={registerInput}
               scrollToInput={scrollToInput}
               photo={photo}
-                pickImage={pickImage}
-                styles={styles}
-              />
-            )}
-
-            {donationType !== "monetary" && (
-              <ContactFields form={form} updateField={updateField} errors={errors} registerInput={registerInput} scrollToInput={scrollToInput} styles={styles} />
-            )}
+              pickImage={pickImage}
+              styles={styles}
+            />
 
             <TouchableOpacity
               style={[styles.submitButton, submitting && styles.disabled]}
@@ -411,7 +322,7 @@ function FieldError({ message, styles }) {
   return message ? <Text style={styles.fieldError}>{message}</Text> : null;
 }
 
-function MonetaryFields({ form, updateField, errors, registerInput, scrollToInput, styles }) {
+function MonetaryFields({ form, updateField, errors, registerInput, scrollToInput, photo, pickImage, styles }) {
   return (
     <>
       <Field label="Amount" styles={styles}>
@@ -441,171 +352,23 @@ function MonetaryFields({ form, updateField, errors, registerInput, scrollToInpu
         />
         <FieldError message={errors.gcashReferenceNumber} styles={styles} />
       </Field>
-      <Field label="GCash sender name or number" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Sender name / mobile number"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.gcashSender}
-          onFocus={() => scrollToInput("gcashSender")}
-          onLayout={registerInput("gcashSender")}
-          onChangeText={(value) => updateField("gcashSender", sanitizeAlphaNumericText(value, 80))}
-          maxLength={80}
-        />
-        <FieldError message={errors.gcashSender} styles={styles} />
-      </Field>
-    </>
-  );
-}
-
-function ItemFields({ form, updateField, errors, registerInput, scrollToInput, photo, pickImage, styles }) {
-  return (
-    <>
-      <Field label="Category" styles={styles}>
-        <Picker
-          selectedValue={form.category}
-          onValueChange={(value) => updateField("category", value)}
-          style={styles.picker}
-          dropdownIconColor={styles.iconColor}
-        >
-          {ITEM_CATEGORIES.map(([key, label]) => (
-            <Picker.Item key={key} label={label} value={key} />
-          ))}
-        </Picker>
-      </Field>
-
-      <Field label="Item name" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Blankets, canned goods, clothes..."
-          placeholderTextColor={styles.placeholderColor}
-          value={form.itemName}
-          onFocus={() => scrollToInput("itemName")}
-          onLayout={registerInput("itemName")}
-          onChangeText={(value) => updateField("itemName", sanitizeAlphaNumericText(value, 80))}
-          maxLength={80}
-        />
-        <FieldError message={errors.itemName} styles={styles} />
-      </Field>
-
-      <Field label="Quantity" styles={styles}>
-        <TextInput
-          style={styles.input}
-          keyboardType="numeric"
-          placeholder="0"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.quantity}
-          onFocus={() => scrollToInput("quantity")}
-          onLayout={registerInput("quantity")}
-          onChangeText={(value) => updateField("quantity", sanitizeQuantity(value))}
-          maxLength={6}
-        />
-        <FieldError message={errors.quantity} styles={styles} />
-      </Field>
-
-      <Field label="Description" styles={styles}>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          multiline
-          placeholder="Condition, size, expiry date, or other details"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.description}
-          onFocus={() => scrollToInput("description")}
-          onLayout={registerInput("description")}
-          onChangeText={(value) => updateField("description", sanitizeIncidentText(value, DONATION_DESCRIPTION_MAX_LENGTH))}
-          maxLength={DONATION_DESCRIPTION_MAX_LENGTH}
-        />
-      </Field>
-
-      <Text style={styles.label}>Pickup or drop-off</Text>
-      <View style={styles.optionRow}>
-        <OptionButton
-          label="Drop-off"
-          active={form.fulfillmentMethod === "drop_off"}
-          onPress={() => updateField("fulfillmentMethod", "drop_off")}
-          styles={styles}
-        />
-        <OptionButton
-          label="Pickup"
-          active={form.fulfillmentMethod === "pickup"}
-          onPress={() => updateField("fulfillmentMethod", "pickup")}
-          styles={styles}
-        />
-      </View>
 
       <TouchableOpacity style={styles.uploadBox} onPress={pickImage} activeOpacity={0.85}>
         {photo?.uri ? (
           <>
             <Image source={{ uri: photo.uri }} style={styles.previewImage} />
-            <Text style={styles.uploadText}>Change image</Text>
+            <Text style={styles.uploadText}>Change proof</Text>
           </>
         ) : (
           <>
             <Ionicons name="image-outline" size={24} color={styles.iconColor} />
-            <Text style={styles.uploadTitle}>Upload image</Text>
-            <Text style={styles.uploadHint}>Optional, but helps MDRRMO verify the item</Text>
+            <Text style={styles.uploadTitle}>Upload GCash proof</Text>
+            <Text style={styles.uploadHint}>Receipt or screenshot is required</Text>
           </>
         )}
       </TouchableOpacity>
+      <FieldError message={errors.photo} styles={styles} />
     </>
-  );
-}
-
-function ContactFields({ form, updateField, errors, registerInput, scrollToInput, styles }) {
-  return (
-    <View style={styles.contactBlock}>
-      <Text style={styles.blockTitle}>Contact and Location</Text>
-      <Field label="Donor name" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Optional"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.donorName}
-          onFocus={() => scrollToInput("donorName")}
-          onLayout={registerInput("donorName")}
-          onChangeText={(value) => updateField("donorName", sanitizeName(value))}
-          maxLength={50}
-        />
-      </Field>
-      <Field label="Contact number" styles={styles}>
-        <TextInput
-          style={styles.input}
-          keyboardType="phone-pad"
-          placeholder="Mobile number"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.donorPhone}
-          onFocus={() => scrollToInput("donorPhone")}
-          onLayout={registerInput("donorPhone")}
-          onChangeText={(value) => updateField("donorPhone", sanitizePhoneLocal(value))}
-          maxLength={10}
-        />
-        <FieldError message={errors.donorPhone} styles={styles} />
-      </Field>
-      <Field label="Location" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Address or pickup/drop-off point"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.location}
-          onFocus={() => scrollToInput("location")}
-          onLayout={registerInput("location")}
-          onChangeText={(value) => updateField("location", sanitizeIncidentText(value, 160))}
-          maxLength={160}
-        />
-      </Field>
-      <Field label="Barangay" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Barangay"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.barangay}
-          onFocus={() => scrollToInput("barangay")}
-          onLayout={registerInput("barangay")}
-          onChangeText={(value) => updateField("barangay", sanitizeAlphaNumericText(value, 80))}
-          maxLength={80}
-        />
-      </Field>
-    </View>
   );
 }
 
@@ -615,14 +378,6 @@ function Field({ label, children, styles }) {
       <Text style={styles.label}>{label}</Text>
       <View style={styles.inputShell}>{children}</View>
     </View>
-  );
-}
-
-function OptionButton({ label, active, onPress, styles }) {
-  return (
-    <TouchableOpacity style={[styles.optionButton, active && styles.optionButtonActive]} onPress={onPress}>
-      <Text style={[styles.optionText, active && styles.optionTextActive]}>{label}</Text>
-    </TouchableOpacity>
   );
 }
 
@@ -661,21 +416,16 @@ function DonationHistoryCard({ item, styles }) {
   const date = item.createdAt
     ? new Date(item.createdAt).toLocaleDateString()
     : "Date unavailable";
-  const isMoney = item.donationType === "monetary";
-  const summary = isMoney
-    ? `PHP ${Number(item.amount || 0).toLocaleString("en-PH")} via ${
-        item.paymentMethod || "payment method"
-      }`
-    : `${item.itemName || item.category || "Item"} x ${item.quantity || 0}`;
+  const summary = `PHP ${Number(item.amount || 0).toLocaleString("en-PH")} via GCash`;
 
   return (
     <View style={styles.historyCard}>
       <View style={styles.historyTop}>
         <View style={styles.historyIcon}>
-          <Ionicons name={isMoney ? "wallet-outline" : "cube-outline"} size={18} color="#FFFFFF" />
+          <Ionicons name="wallet-outline" size={18} color="#FFFFFF" />
         </View>
         <View style={styles.historyCopy}>
-          <Text style={styles.historyTitle}>{isMoney ? "Monetary Donation" : "Item Donation"}</Text>
+          <Text style={styles.historyTitle}>GCash Donation</Text>
           <Text style={styles.historyDate}>{date}</Text>
         </View>
         <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
@@ -683,14 +433,11 @@ function DonationHistoryCard({ item, styles }) {
         </View>
       </View>
       <Text style={styles.historySummary}>{summary}</Text>
-      {item.paymentMethod ? (
-        <Text style={styles.assignmentText}>Mode: {item.paymentMethod}</Text>
-      ) : null}
       {item.referenceNumber ? (
         <Text style={styles.assignmentText}>Reference: {item.referenceNumber}</Text>
       ) : null}
-      {item.assignment?.targetName ? (
-        <Text style={styles.assignmentText}>Assigned to {item.assignment.targetName}</Text>
+      {item.photos?.[0]?.fileUrl ? (
+        <Image source={{ uri: item.photos[0].fileUrl }} style={styles.historyProofImage} />
       ) : null}
     </View>
   );
@@ -1151,6 +898,13 @@ function createStyles(theme) {
       color: theme.muted,
       fontSize: 11,
       fontWeight: "700",
+    },
+    historyProofImage: {
+      width: "100%",
+      height: 150,
+      borderRadius: 14,
+      marginTop: 10,
+      backgroundColor: theme.surface,
     },
   });
 

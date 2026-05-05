@@ -51,6 +51,9 @@ router.post(
 
 // ✅ Update status
 router.put("/updateStatus/:id", incidentController.updateStatus);
+router.put("/aiStatus/:id", incidentController.updateAIStatus);
+router.put("/forceApprove/:id", incidentController.forceApproveIncident);
+router.put("/reverify/:id", incidentController.reverifyIncident);
 
 // ✅ Delete incident
 router.delete("/delete/:id", incidentController.deleteIncident);

@@ -1,8 +1,42 @@
 import { io } from "socket.io-client";
 
-const SOCKET_URL = "http://192.168.1.8:8000"; // same as your backend
+import { getApiBaseUrl } from "./api";
 
-export const socket = io(SOCKET_URL, {
-  transports: ["websocket"],
-  autoConnect: false,
-});
+let socketInstance = null;
+let socketBaseUrl = "";
+
+export async function getSocket() {
+  const baseUrl = await getApiBaseUrl();
+
+  if (!socketInstance || socketBaseUrl !== baseUrl) {
+    if (socketInstance) {
+      socketInstance.disconnect();
+    }
+
+    socketBaseUrl = baseUrl;
+    socketInstance = io(baseUrl, {
+      transports: ["websocket", "polling"],
+      autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 800,
+      reconnectionDelayMax: 5000,
+    });
+  }
+
+  if (!socketInstance.connected) {
+    socketInstance.connect();
+  }
+
+  return socketInstance;
+}
+
+export function getActiveSocket() {
+  return socketInstance;
+}
+
+export function disconnectSocket() {
+  if (socketInstance) {
+    socketInstance.disconnect();
+  }
+}

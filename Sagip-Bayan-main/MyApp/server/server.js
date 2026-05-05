@@ -182,7 +182,12 @@ app.get("/api/mobile-debug", async (req, res) => {
   try {
     const [incidentCount, evacCount, guidelineCount] = await Promise.all([
       mongoose.connection.db.collection("incidents").countDocuments({
-        status: { $in: [/^reported$/i, /^on[ _-]+process$/i, /^resolved$/i] },
+        $or: [
+          { isPublic: true },
+          { forceApproved: true },
+          { approvedByMDRRMO: true },
+          { status: /^approved$/i },
+        ],
       }),
       mongoose.connection.db.collection("evacplaces").countDocuments({ isArchived: { $ne: true } }),
       mongoose.connection.db.collection("guidelines").countDocuments({ status: "published" }),
@@ -336,19 +341,22 @@ app.use((err, req, res, next) => {
 // --------------------
 const io = new Server(server, {
   cors: {
-    origin: [
-      "https://sagipbayan.com",
-      "http://localhost:3000",
-      "http://localhost:8081",
-      "http://10.0.2.2:8081",
-      "http://192.168.1.87:8081",
-    ],
+    origin: "*",
     credentials: true,
   },
 });
 
+app.set("io", io);
+
 io.on("connection", (socket) => {
   console.log("[socket] User connected:", socket.id);
+
+  socket.on("joinRoom", (userId) => {
+    const roomId = String(userId || "").trim();
+    if (!roomId) return;
+    socket.join(roomId);
+    console.log("[socket] joined room:", roomId);
+  });
 
   socket.on("send-location", (data) => {
     console.log("[socket] Received location:", data);

@@ -36,9 +36,10 @@ const donationSchema = new mongoose.Schema(
   {
     donationType: {
       type: String,
-      enum: ["monetary", "non_monetary"],
+      enum: ["monetary"],
       required: true,
       index: true,
+      default: "monetary",
     },
     category: {
       type: String,
@@ -60,7 +61,7 @@ const donationSchema = new mongoose.Schema(
     unit: { type: String, default: "pcs", trim: true },
     description: { type: String, default: "", trim: true },
     amount: { type: Number, default: 0, min: 0 },
-    paymentMethod: { type: String, default: "", trim: true },
+    paymentMethod: { type: String, default: "GCash", trim: true },
     referenceNumber: { type: String, default: "", trim: true },
     gcashReferenceNumber: { type: String, default: "", trim: true },
     gcashSender: { type: String, default: "", trim: true },

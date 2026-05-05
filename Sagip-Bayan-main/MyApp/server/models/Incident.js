@@ -87,6 +87,40 @@ const incidentSchema = new mongoose.Schema(
       trim: true,
     },
 
+    aiStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+      trim: true,
+      index: true,
+    },
+
+    isPublic: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    forceApproved: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    approvedByMDRRMO: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    aiReview: {
+      status: { type: String, default: "", trim: true },
+      score: { type: Number, default: null },
+      reason: { type: String, default: "", trim: true },
+      labels: { type: [String], default: [] },
+      reviewedAt: { type: Date, default: null },
+    },
+
     image: {
       type: incidentImageSchema,
       default: () => ({
@@ -118,6 +152,20 @@ const incidentSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+
+    reporterUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );
@@ -125,6 +173,7 @@ const incidentSchema = new mongoose.Schema(
 incidentSchema.index({ status: 1, createdAt: -1 });
 incidentSchema.index({ status: 1, barangay: 1, type: 1, createdAt: -1 });
 incidentSchema.index({ status: 1, type: 1, createdAt: -1, latitude: 1, longitude: 1 });
+incidentSchema.index({ isPublic: 1, aiStatus: 1, forceApproved: 1, createdAt: -1 });
 
 const IncidentModel = mongoose.model("Incident", incidentSchema);
 

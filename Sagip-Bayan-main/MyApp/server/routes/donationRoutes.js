@@ -6,7 +6,7 @@ const { uploadDonationPhotos } = require("../middleware/upload");
 router.post(
   "/",
   (req, res, next) => {
-    uploadDonationPhotos.array("photos", 4)(req, res, (err) => {
+    uploadDonationPhotos.array("photos", 1)(req, res, (err) => {
       if (err) {
         return res.status(400).json({
           message: err.message || "Donation photo upload failed.",

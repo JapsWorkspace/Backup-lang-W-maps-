@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 
-export const LAN_IP = "192.168.1.97";
+export const LAN_IP = "192.168.1.208";
 export const PORT = 8000;
 export const NGROK_URL = ""; // Example: "https://xxxx.ngrok.app"
 export const HEALTH_PATH = "/health";

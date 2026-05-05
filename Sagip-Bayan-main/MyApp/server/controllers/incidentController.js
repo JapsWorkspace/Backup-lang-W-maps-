@@ -2,9 +2,9 @@ const IncidentModel = require("../models/Incident");
 const HistoryModel = require("../models/History");
 const UserModel = require("../models/User");
 const cloudinary = require("../config/cloudinary");
+const mongoose = require("mongoose");
 
-const DUPLICATE_INCIDENT_RADIUS_METERS = 100;
-const DUPLICATE_INCIDENT_WINDOW_HOURS = 24;
+const DUPLICATE_INCIDENT_RADIUS_METERS = 200;
 const INCIDENT_USER_ALERT_RADIUS_METERS = 1000;
 const INCIDENT_USER_ALERT_RECENT_HOURS = 24;
 const INCIDENT_CLUSTER_RECENT_HOURS = 6;
@@ -23,8 +23,19 @@ const DUPLICATE_ACTIVE_STATUSES = [
   "pending",
   "reported",
   "on process",
-  "on_process",
-  "on-process",
+  "in progress",
+  "ongoing",
+  "active",
+  "approved",
+];
+const DUPLICATE_CLOSED_STATUSES = [
+  "resolved",
+  "closed",
+  "cancelled",
+  "canceled",
+  "rejected",
+  "dismissed",
+  "invalid",
 ];
 
 const BARANGAY_BY_DISTRICT = {
@@ -92,6 +103,12 @@ function sanitizeAlphaNumericText(value, max = 120) {
   return sanitizeText(value, max).replace(/[^A-Za-z0-9\s-]/g, "");
 }
 
+function toObjectIdOrNull(value) {
+  return value && mongoose.Types.ObjectId.isValid(String(value))
+    ? value
+    : null;
+}
+
 function buildIncidentAddress({ district, barangay, street, location }) {
   const cleanDistrict = sanitizeText(district, 80);
   const cleanBarangay = sanitizeAlphaNumericText(barangay, 80);
@@ -119,15 +136,24 @@ function normalizeStatus(status) {
     .replace(/\s+/g, " ");
 }
 
-const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
-const PUBLIC_INCIDENT_STATUS_QUERY = [/^reported$/i, /^on[ _-]+process$/i, /^resolved$/i];
-
-function isPublicIncidentStatus(status) {
-  return PUBLIC_INCIDENT_STATUSES.includes(normalizeStatus(status));
-}
+const PUBLIC_INCIDENT_QUERY = {
+  $or: [
+    { isPublic: true },
+    { forceApproved: true },
+    { approvedByMDRRMO: true },
+    { status: /^approved$/i },
+  ],
+};
 
 function isPublicIncident(incident) {
-  return isPublicIncidentStatus(incident?.status);
+  const status = normalizeStatus(incident?.status);
+
+  return (
+    incident?.isPublic === true ||
+    incident?.forceApproved === true ||
+    incident?.approvedByMDRRMO === true ||
+    status === "approved"
+  );
 }
 
 function normalizeIncidentType(type) {
@@ -136,6 +162,15 @@ function normalizeIncidentType(type) {
   if (clean.includes("fire")) return "fire";
   if (clean.includes("earthquake")) return "earthquake";
   if (clean.includes("typhoon") || clean.includes("storm")) return "typhoon";
+  if (clean.includes("accident") || clean.includes("collision")) return "accident";
+  if (
+    clean.includes("road_block") ||
+    clean.includes("road block") ||
+    clean.includes("blockage") ||
+    clean.includes("obstruction")
+  ) {
+    return "road_block";
+  }
   return clean || "incident";
 }
 
@@ -156,6 +191,20 @@ function getIncidentClusterThreshold(count) {
   return INCIDENT_CLUSTER_THRESHOLDS.find((item) => count >= item.count) || null;
 }
 
+function toPlainObject(document) {
+  return typeof document?.toObject === "function"
+    ? document.toObject({ virtuals: true })
+    : document;
+}
+
+function getNotificationStorageDebugInfo() {
+  return {
+    dbName: mongoose.connection?.name || "",
+    notificationCollection: UserModel.collection?.name || "users",
+    notificationPath: "users.notifications",
+  };
+}
+
 function getDistrictBarangays(district) {
   return BARANGAY_BY_DISTRICT[sanitizeText(district, 80)] || [];
 }
@@ -173,7 +222,7 @@ function uniqueNormalizedBarangays(barangays) {
 function getIncidentClusterMessage(type, barangayCount) {
   const category = normalizeIncidentType(type);
   if (category === "flood") {
-    return "Multiple nearby barangays have reported flooding. Please stay alert.";
+    return "Multiple nearby barangays have reported flooding. Stay alert.";
   }
 
   return `${barangayCount} barangays have reported the same incident nearby. Be careful.`;
@@ -238,28 +287,46 @@ function buildCoordinateBox(latitude, longitude, radiusMeters) {
 }
 
 async function findDuplicateIncident({ type, latitude, longitude }) {
-  const point = { latitude, longitude };
-  const box = buildCoordinateBox(
-    latitude,
-    longitude,
-    DUPLICATE_INCIDENT_RADIUS_METERS
-  );
-  const since = new Date(
-    Date.now() - DUPLICATE_INCIDENT_WINDOW_HOURS * 60 * 60 * 1000
-  );
+  const normalizedType = normalizeIncidentType(type);
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+
+  if (
+    !normalizedType ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng)
+  ) {
+    return null;
+  }
+
+  const point = { latitude: lat, longitude: lng };
+  const box = buildCoordinateBox(lat, lng, DUPLICATE_INCIDENT_RADIUS_METERS);
 
   const candidates = await IncidentModel.find({
-    type: { $regex: new RegExp(`^${escapeRegex(type)}$`, "i") },
-    status: { $in: DUPLICATE_ACTIVE_STATUSES },
-    createdAt: { $gte: since },
     latitude: { $gte: box.minLat, $lte: box.maxLat },
     longitude: { $gte: box.minLng, $lte: box.maxLng },
+    $or: [
+      ...PUBLIC_INCIDENT_QUERY.$or,
+      { status: { $in: DUPLICATE_ACTIVE_STATUSES } },
+      { status: /^pending$/i },
+      { status: /^reported$/i },
+      { status: /^on[ _-]?process$/i },
+      { status: /^in[ _-]?progress$/i },
+      { status: /^ongoing$/i },
+      { status: /^active$/i },
+    ],
   })
     .sort({ createdAt: -1 })
-    .select("_id type status latitude longitude location createdAt");
+    .select(
+      "_id type status aiStatus isPublic forceApproved approvedByMDRRMO latitude longitude location createdAt"
+    );
 
   return candidates.find(
     (incident) =>
+      normalizeIncidentType(incident.type) === normalizedType &&
+      !DUPLICATE_CLOSED_STATUSES.includes(normalizeStatus(incident.status)) &&
+      (isPublicIncident(incident) ||
+        DUPLICATE_ACTIVE_STATUSES.includes(normalizeStatus(incident.status))) &&
       distanceMeters(point, {
         latitude: incident.latitude,
         longitude: incident.longitude,
@@ -267,46 +334,359 @@ async function findDuplicateIncident({ type, latitude, longitude }) {
   );
 }
 
+async function verifyIncidentImageWithAI({ incident, image }) {
+  const aiEndpoint = sanitizeText(process.env.INCIDENT_AI_VERIFY_URL, 300);
+
+  if (!image?.fileUrl) {
+    return {
+      aiStatus: "rejected",
+      score: 0,
+      labels: [],
+      reason: "No image evidence was uploaded.",
+    };
+  }
+
+  if (!aiEndpoint) {
+    return {
+      aiStatus: "approved",
+      score: 1,
+      labels: [normalizeIncidentType(incident?.type)],
+      reason: "Image evidence received and accepted by local AI verification fallback.",
+    };
+  }
+
+  const fetch = require("node-fetch");
+  const response = await fetch(aiEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(process.env.INCIDENT_AI_VERIFY_TOKEN
+        ? { Authorization: `Bearer ${process.env.INCIDENT_AI_VERIFY_TOKEN}` }
+        : {}),
+    },
+    body: JSON.stringify({
+      incidentId: String(incident?._id || ""),
+      type: incident?.type,
+      level: incident?.level,
+      barangay: incident?.barangay,
+      district: incident?.district,
+      latitude: incident?.latitude,
+      longitude: incident?.longitude,
+      imageUrl: image.fileUrl,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.message || data?.error || "AI verification failed.");
+  }
+
+  const status = String(data?.aiStatus || data?.status || "")
+    .trim()
+    .toLowerCase();
+
+  return {
+    aiStatus: status === "approved" ? "approved" : "rejected",
+    score: Number.isFinite(Number(data?.score)) ? Number(data.score) : null,
+    labels: Array.isArray(data?.labels)
+      ? data.labels.map((label) => sanitizeText(label, 80)).filter(Boolean)
+      : [],
+    reason: sanitizeText(data?.reason || data?.message, 500),
+  };
+}
+
+async function publishIncidentIfPublic(incident, { excludeUsername = "", excludePhone = "" } = {}) {
+  if (!isPublicIncident(incident)) return;
+
+  await notifyUsersInSameBarangay({
+    incident,
+    excludeUsername,
+    excludePhone,
+  });
+  await notifyNearbyRepeatedIncidents(incident);
+  await notifyBarangayIncidentDangerThreshold(incident);
+}
+
+async function getIncidentReporterUserId(incident) {
+  const reporterUserId = toObjectIdOrNull(incident?.reporterUserId);
+  if (reporterUserId) return String(reporterUserId);
+
+  const fallbackUserId = toObjectIdOrNull(incident?.userId);
+  if (fallbackUserId) return String(fallbackUserId);
+
+  const reportedBy = toObjectIdOrNull(incident?.reportedBy);
+  return reportedBy ? String(reportedBy) : null;
+}
+
+function getIncidentApprovalDedupeKey(incidentId, reporterUserId) {
+  return `incident-approved-${incidentId}-${reporterUserId}`;
+}
+
+async function hasIncidentApprovalNotification(incidentId, reporterUserId, dedupeKey) {
+  const incidentObjectId = toObjectIdOrNull(incidentId);
+  const reporterObjectId = toObjectIdOrNull(reporterUserId);
+
+  if (!incidentObjectId || !reporterObjectId) return false;
+
+  return Boolean(
+    await UserModel.exists({
+      _id: reporterObjectId,
+      $or: [
+        {
+          notifications: {
+            $elemMatch: {
+              type: "incident_approved",
+              referenceId: incidentObjectId,
+              recipientUser: reporterObjectId,
+            },
+          },
+        },
+        {
+          notifications: {
+            $elemMatch: {
+              type: "incident_approved",
+              incidentId: incidentObjectId,
+              targetUsers: reporterObjectId,
+            },
+          },
+        },
+        {
+          notifications: {
+            $elemMatch: {
+              type: "incident_approved",
+              dedupeKey,
+            },
+          },
+        },
+      ],
+    })
+  );
+}
+
+function emitIncidentApproved(req, incident, reporterUserId = null, notification = null) {
+  const io = req.app.get("io");
+  if (!io || !incident) return;
+
+  const payload = toPlainObject(incident);
+  const notificationPayload = notification ? toPlainObject(notification) : null;
+
+  io.emit("incident:updated", payload);
+  io.emit("incident:approved", payload);
+  io.emit("incidentApproved", payload);
+
+  if (reporterUserId) {
+    const reporterRoom = String(reporterUserId);
+    io.to(reporterRoom).emit("myIncidentApproved", payload);
+    if (notificationPayload) {
+      io.to(reporterRoom).emit("notification:new", notificationPayload);
+    }
+  }
+
+  console.log("[incident socket emitted]", {
+    id: String(payload?._id || ""),
+    reporterUserId: reporterUserId ? String(reporterUserId) : "",
+    events: [
+      "incident:updated",
+      "incident:approved",
+      "incidentApproved",
+      ...(reporterUserId ? ["myIncidentApproved"] : []),
+      ...(notificationPayload ? ["notification:new"] : []),
+    ],
+  });
+}
+
+async function notifyReporterIncidentApproved(req, incident) {
+  try {
+    const reporterUserId = await getIncidentReporterUserId(incident);
+    let notification = null;
+
+    if (!reporterUserId) {
+      console.log("[reporter approval notification skipped no reporter]", {
+        incidentId: String(incident?._id || ""),
+        reporterUserId: incident?.reporterUserId || null,
+        userId: incident?.userId || null,
+      });
+      emitIncidentApproved(req, incident, null, null);
+      return;
+    }
+
+    const dedupeKey = getIncidentApprovalDedupeKey(incident._id, reporterUserId);
+    const alreadyNotified = await hasIncidentApprovalNotification(
+      incident._id,
+      reporterUserId,
+      dedupeKey
+    );
+
+    if (alreadyNotified) {
+      console.log("[reporter approval notification skipped duplicate]", {
+        incidentId: String(incident._id),
+        reporterUserId: String(reporterUserId),
+        ...getNotificationStorageDebugInfo(),
+      });
+      emitIncidentApproved(req, incident, reporterUserId, null);
+      return;
+    }
+
+    notification = await addNotification(reporterUserId, {
+      type: "incident_approved",
+      module: "incident",
+      priority: "normal",
+      title: "Incident Report Verified",
+      message:
+        "Your reported incident has been reviewed and verified by the MDRRMO. It has been approved as a valid incident and is now visible on the public map for community awareness.",
+      referenceId: incident._id,
+      referenceModel: "Incident",
+      recipientUser: reporterUserId,
+      recipientUserModel: "User",
+      sourceLabel: "Incident Alert",
+      source: "incident",
+      official: true,
+      notificationType: "normal",
+      soundType: "notification",
+      incidentId: incident._id,
+      targetUsers: [reporterUserId],
+      dedupeKey,
+      actionable: false,
+      metadata: {
+        incidentId: incident._id,
+        incidentType: incident.type || "",
+        location: incident.location || "",
+        approvalStatus: "approved",
+      },
+    });
+
+    if (notification) {
+      console.log("[reporter approval notification created]", {
+        incidentId: String(incident._id),
+        reporterUserId: String(reporterUserId),
+        notificationId: String(notification._id || ""),
+        ...getNotificationStorageDebugInfo(),
+      });
+    } else {
+      console.log("[reporter approval notification skipped duplicate]", {
+        incidentId: String(incident._id),
+        reporterUserId: String(reporterUserId),
+        reason: "dedupe_update_noop",
+        ...getNotificationStorageDebugInfo(),
+      });
+    }
+
+    emitIncidentApproved(req, incident, reporterUserId, notification);
+  } catch (err) {
+    console.error("[reporter approval notification error]", {
+      incidentId: String(incident?._id || ""),
+      reporterUserId: incident?.reporterUserId || null,
+      userId: incident?.userId || null,
+      message: err?.message || err,
+      ...getNotificationStorageDebugInfo(),
+    });
+    emitIncidentApproved(req, incident, null, null);
+  }
+}
+
+async function applyIncidentAIResult(incidentId, aiResult) {
+  const aiStatus = aiResult.aiStatus === "approved" ? "approved" : "rejected";
+
+  const incident = await IncidentModel.findByIdAndUpdate(
+    incidentId,
+    {
+      aiStatus,
+      isPublic: false,
+      aiReview: {
+        status: aiStatus,
+        score: aiResult.score,
+        labels: aiResult.labels || [],
+        reason:
+          aiResult.reason ||
+          (aiStatus === "approved"
+            ? "Approved by AI verification."
+            : "Rejected by AI verification."),
+        reviewedAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+
+  console.log("[ai result]", {
+    id: String(incident?._id || incidentId),
+    aiStatus,
+    score: aiResult.score,
+    reason: aiResult.reason || "",
+  });
+  console.log("[public status]", {
+    id: String(incident?._id || incidentId),
+    isPublic: incident?.isPublic === true,
+    aiStatus: incident?.aiStatus,
+    forceApproved: incident?.forceApproved === true,
+    approvedByMDRRMO: incident?.approvedByMDRRMO === true,
+  });
+
+  return incident;
+}
+
 async function addNotification(userId, notification) {
   if (!userId) return;
 
+  const notificationType = normalizeNotificationType(notification.type);
   const dedupeKey = sanitizeText(notification.dedupeKey, 180);
+  const referenceId = toObjectIdOrNull(
+    notification.referenceId ||
+      notification.incidentId ||
+      notification.guidelineId ||
+      notification.announcementId
+  );
+  const recipientUser = toObjectIdOrNull(notification.recipientUser || userId);
+  const notificationDoc = {
+    _id: new mongoose.Types.ObjectId(),
+    type: notificationType,
+    module: notification.module || "",
+    message: notification.message,
+    title: notification.title || "",
+    sourceLabel: notification.sourceLabel || "",
+    source: notification.source || "",
+    official: Boolean(notification.official),
+    notificationType: notification.notificationType || "normal",
+    priority: notification.priority || "normal",
+    soundType: notification.soundType || "notification",
+    incidentId: notification.incidentId || null,
+    referenceId: referenceId || null,
+    referenceModel: notification.referenceModel || "",
+    recipientUser: recipientUser || null,
+    recipientUserModel: notification.recipientUserModel || "",
+    targetBarangays: Array.isArray(notification.targetBarangays)
+      ? notification.targetBarangays
+      : [],
+    targetUsers: Array.isArray(notification.targetUsers)
+      ? notification.targetUsers
+      : [],
+    connectionId: notification.connectionId || null,
+    actorUserId: notification.actorUserId || null,
+    actorName: notification.actorName || "",
+    actorUsername: notification.actorUsername || "",
+    actorAvatar: notification.actorAvatar || "",
+    connectionCode: notification.connectionCode || "",
+    actionable: Boolean(notification.actionable),
+    handledAt: notification.handledAt || null,
+    dedupeKey,
+    metadata:
+      notification.metadata && typeof notification.metadata === "object"
+        ? notification.metadata
+        : {},
+    read: false,
+    isRead: false,
+    createdAt: new Date(),
+  };
   const filter = dedupeKey
     ? { _id: userId, "notifications.dedupeKey": { $ne: dedupeKey } }
     : { _id: userId };
 
-  await UserModel.updateOne(filter, {
+  const result = await UserModel.updateOne(filter, {
     $push: {
-      notifications: {
-        type: normalizeNotificationType(notification.type),
-        message: notification.message,
-        title: notification.title || "",
-        sourceLabel: notification.sourceLabel || "",
-        source: notification.source || "",
-        official: Boolean(notification.official),
-        notificationType: notification.notificationType || "normal",
-        soundType: notification.soundType || "notification",
-        incidentId: notification.incidentId || null,
-        targetBarangays: Array.isArray(notification.targetBarangays)
-          ? notification.targetBarangays
-          : [],
-        targetUsers: Array.isArray(notification.targetUsers)
-          ? notification.targetUsers
-          : [],
-        connectionId: notification.connectionId || null,
-        actorUserId: notification.actorUserId || null,
-        actorName: notification.actorName || "",
-        actorUsername: notification.actorUsername || "",
-        actorAvatar: notification.actorAvatar || "",
-        connectionCode: notification.connectionCode || "",
-        actionable: Boolean(notification.actionable),
-        handledAt: notification.handledAt || null,
-        dedupeKey,
-        read: false,
-        createdAt: new Date(),
-      },
+      notifications: notificationDoc,
     },
   });
+
+  return result.modifiedCount > 0 ? notificationDoc : null;
 }
 
 async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePhone }) {
@@ -454,10 +834,12 @@ async function notifyNearbyRepeatedIncidents(incident) {
     };
     const districtBarangays = getDistrictBarangays(district);
     const recentPublicReports = await IncidentModel.find({
-      status: { $in: PUBLIC_INCIDENT_STATUS_QUERY },
+      ...PUBLIC_INCIDENT_QUERY,
       barangay: { $ne: "" },
       createdAt: { $gte: since },
-    }).select("_id type district barangay latitude longitude createdAt");
+    }).select(
+      "_id type district barangay latitude longitude aiStatus isPublic forceApproved approvedByMDRRMO createdAt"
+    );
 
     const clusterReports = recentPublicReports.filter((candidate) => {
       if (!isPublicIncident(candidate)) return false;
@@ -562,7 +944,7 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
     const stats = await IncidentModel.aggregate([
       {
         $match: {
-          status: { $in: PUBLIC_INCIDENT_STATUS_QUERY },
+          ...PUBLIC_INCIDENT_QUERY,
           barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
         },
       },
@@ -654,23 +1036,22 @@ const getIncidents = async (req, res) => {
       ? status
         ? { status: new RegExp(`^${escapeRegex(status)}$`, "i") }
         : {}
-      : {
-          status: {
-            $in: PUBLIC_INCIDENT_STATUS_QUERY,
-          },
-        };
+      : PUBLIC_INCIDENT_QUERY;
 
     const incidents = await IncidentModel.find(filter).sort({ createdAt: -1 });
     const publicIncidents = includeAll
       ? incidents
-      : incidents.filter((incident) => isPublicIncidentStatus(incident?.status));
+      : incidents.filter((incident) => isPublicIncident(incident));
 
-    console.log("[incident/getIncidents] public fetch:", {
+    console.log("[public status]", {
+      route: "getIncidents",
       includeAll,
       requestedStatus: status || "",
       fetched: incidents.length,
       returned: publicIncidents.length,
+      publicCount: publicIncidents.length,
       statuses: [...new Set(incidents.map((incident) => incident?.status || ""))],
+      aiStatuses: [...new Set(incidents.map((incident) => incident?.aiStatus || ""))],
     });
     res.json(publicIncidents);
   } catch (err) {
@@ -685,6 +1066,7 @@ const registerIncident = async (req, res) => {
     if (!req.body) req.body = {};
 
     const type = sanitizeText(req.body.type, 60);
+    const incidentType = normalizeIncidentType(type);
     const level = sanitizeText(req.body.level, 40);
     const district = sanitizeAlphaNumericText(req.body.district, 80);
     const barangay = sanitizeAlphaNumericText(req.body.barangay, 80);
@@ -698,7 +1080,18 @@ const registerIncident = async (req, res) => {
     const description = sanitizeIncidentText(req.body.description, 1000);
     const usernames = sanitizeText(req.body.usernames, 60) || null;
     const phone = sanitizePhone(req.body.phone) || null;
-    const allowedTypes = new Set(["flood", "typhoon", "fire", "earthquake"]);
+    const userId = toObjectIdOrNull(req.body.userId || req.session?.userId);
+    const reporterUserId = toObjectIdOrNull(
+      req.body.reporterUserId || req.body.userId || req.session?.userId
+    );
+    const allowedTypes = new Set([
+      "flood",
+      "typhoon",
+      "fire",
+      "earthquake",
+      "accident",
+      "road_block",
+    ]);
     const allowedLevels = new Set(["low", "medium", "high", "critical"]);
 
     const latitude =
@@ -711,7 +1104,7 @@ const registerIncident = async (req, res) => {
         ? Number(req.body.longitude)
         : null;
 
-    if (!type || !allowedTypes.has(type.toLowerCase())) {
+    if (!type || !allowedTypes.has(incidentType)) {
       return res.status(400).json({
         message: "A valid incident type is required.",
       });
@@ -774,7 +1167,7 @@ const registerIncident = async (req, res) => {
     }
 
     const duplicateIncident = await findDuplicateIncident({
-      type,
+      type: incidentType,
       latitude,
       longitude,
     });
@@ -784,16 +1177,7 @@ const registerIncident = async (req, res) => {
         code: "DUPLICATE_INCIDENT",
         title: "Similar Incident Already Reported",
         message:
-          "An incident with the same category has already been reported near this area. Please check existing reports instead.",
-        duplicate: {
-          id: duplicateIncident._id,
-          type: duplicateIncident.type,
-          status: duplicateIncident.status,
-          latitude: duplicateIncident.latitude,
-          longitude: duplicateIncident.longitude,
-          location: duplicateIncident.location,
-          createdAt: duplicateIncident.createdAt,
-        },
+          "A similar incident has already been reported in this area. Please check the existing report instead.",
       });
     }
 
@@ -808,7 +1192,7 @@ const registerIncident = async (req, res) => {
     const imageData = imageItems[0] || null;
 
     const newIncident = new IncidentModel({
-      type,
+      type: incidentType,
       level,
       district,
       barangay,
@@ -822,12 +1206,53 @@ const registerIncident = async (req, res) => {
       images: imageItems,
       usernames,
       phone,
+      reporterUserId,
+      userId,
       status: "reported",
+      aiStatus: "pending",
+      isPublic: false,
+      forceApproved: false,
+      approvedByMDRRMO: false,
     });
 
     const incident = await newIncident.save();
 
-    console.log("Incident registered:", incident);
+    console.log("[incident reporter saved]", {
+      incidentId: String(incident._id),
+      userId: incident.userId || null,
+      reporterUserId: incident.reporterUserId || null,
+      bodyUserId: req.body.userId || null,
+      bodyReporterUserId: req.body.reporterUserId || null,
+      sessionUserId: req.session?.userId || null,
+    });
+
+    if (!incident.userId && !incident.reporterUserId) {
+      console.log("[incident reporter missing]", {
+        incidentId: String(incident._id),
+        bodyUserId: req.body.userId || null,
+        bodyReporterUserId: req.body.reporterUserId || null,
+        sessionUserId: req.session?.userId || null,
+      });
+    }
+
+    console.log("[incident submit]", {
+      id: String(incident._id),
+      status: incident.status,
+      aiStatus: incident.aiStatus,
+      isPublic: incident.isPublic,
+      type: incident.type,
+      barangay: incident.barangay,
+      userId: incident.userId ? String(incident.userId) : "",
+      reporterUserId: incident.reporterUserId ? String(incident.reporterUserId) : "",
+      images: imageItems.length,
+    });
+    console.log("[public status]", {
+      id: String(incident._id),
+      isPublic: incident.isPublic,
+      aiStatus: incident.aiStatus,
+      forceApproved: incident.forceApproved,
+      approvedByMDRRMO: incident.approvedByMDRRMO,
+    });
 
     await HistoryModel.create({
       action: "ADD",
@@ -835,16 +1260,28 @@ const registerIncident = async (req, res) => {
       details: incident.description,
     });
 
-    await notifyUsersInSameBarangay({
-      incident,
-      excludeUsername: "",
-      excludePhone: "",
-    });
-    await notifyNearbyRepeatedIncidents(incident);
-    await notifyBarangayIncidentDangerThreshold(incident);
+    try {
+      const aiResult = await verifyIncidentImageWithAI({
+        incident,
+        image: imageData,
+      });
+      const verifiedIncident = await applyIncidentAIResult(incident._id, aiResult);
+      if (verifiedIncident) {
+        return res.status(201).json({
+          message: "Your report is being verified by AI and MDRRMO. It will appear on the map once approved.",
+          incident: verifiedIncident,
+        });
+      }
+    } catch (aiErr) {
+      console.error("[ai result]", {
+        id: String(incident._id),
+        aiStatus: "pending",
+        error: aiErr?.message || aiErr,
+      });
+    }
 
     return res.status(201).json({
-      message: "Incident created successfully",
+      message: "Your report is being verified by AI and MDRRMO. It will appear on the map once approved.",
       incident,
     });
   } catch (err) {
@@ -858,11 +1295,19 @@ const updateStatus = async (req, res) => {
   try {
     const { status } = req.body;
     const nextStatus = normalizeStatus(status);
-    const previousIncident = await IncidentModel.findById(req.params.id).select("status");
+    const previousIncident = await IncidentModel.findById(req.params.id).select(
+      "status aiStatus isPublic forceApproved approvedByMDRRMO"
+    );
+    const isAdminApprovalStatus = nextStatus === "approved";
 
     const updatedIncident = await IncidentModel.findByIdAndUpdate(
       req.params.id,
-      { status: nextStatus || status },
+      {
+        status: isAdminApprovalStatus ? "approved" : nextStatus || status,
+        ...(isAdminApprovalStatus
+          ? { isPublic: true, approvedByMDRRMO: true, forceApproved: true }
+          : {}),
+      },
       { new: true }
     );
 
@@ -871,28 +1316,183 @@ const updateStatus = async (req, res) => {
     }
 
     await HistoryModel.create({
-      action: "STATUS_UPDATE",
+      action: isAdminApprovalStatus ? "MDRRMO_APPROVAL" : "STATUS_UPDATE",
       placeName: updatedIncident.location,
       details: `Updated to ${nextStatus || status}`,
     });
 
-    if (
-      isPublicIncidentStatus(nextStatus) &&
-      !isPublicIncidentStatus(previousIncident?.status)
-    ) {
-      await notifyUsersInSameBarangay({
-        incident: updatedIncident,
+    if (isAdminApprovalStatus) {
+      console.log("[verification update]", {
+        incidentId: String(updatedIncident._id),
+        requestedStatus: status,
+        status: updatedIncident.status,
+        isPublic: updatedIncident.isPublic,
+        approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+        forceApproved: updatedIncident.forceApproved,
+        reporterUserId: updatedIncident.reporterUserId || null,
+        userId: updatedIncident.userId || null,
+        ...getNotificationStorageDebugInfo(),
+      });
+      console.log("[incident approval]", {
+        id: String(updatedIncident._id),
+        status: updatedIncident.status,
+        isPublic: updatedIncident.isPublic,
+        forceApproved: updatedIncident.forceApproved,
+        approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+      });
+      console.log("[public status]", {
+        id: String(updatedIncident._id),
+        isPublic: updatedIncident.isPublic,
+        aiStatus: updatedIncident.aiStatus,
+        forceApproved: updatedIncident.forceApproved,
+        approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+      });
+    }
+
+    if (isPublicIncident(updatedIncident) && !isPublicIncident(previousIncident)) {
+      await publishIncidentIfPublic(updatedIncident, {
         excludeUsername: updatedIncident.usernames,
         excludePhone: updatedIncident.phone,
       });
-      await notifyNearbyRepeatedIncidents(updatedIncident);
-      await notifyBarangayIncidentDangerThreshold(updatedIncident);
+    }
+
+    if (isAdminApprovalStatus && isPublicIncident(updatedIncident)) {
+      await notifyReporterIncidentApproved(req, updatedIncident);
     }
 
     res.json(updatedIncident);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update status" });
+  }
+};
+
+const updateAIStatus = async (req, res) => {
+  try {
+    const aiStatus = String(req.body.aiStatus || req.body.status || "")
+      .trim()
+      .toLowerCase();
+
+    if (!["approved", "rejected"].includes(aiStatus)) {
+      return res.status(400).json({ message: "aiStatus must be approved or rejected." });
+    }
+
+    const incident = await applyIncidentAIResult(req.params.id, {
+      aiStatus,
+      score: req.body.score == null ? null : Number(req.body.score),
+      labels: Array.isArray(req.body.labels) ? req.body.labels : [],
+      reason: sanitizeText(req.body.reason, 500),
+    });
+
+    if (!incident) {
+      return res.status(404).json({ message: "Incident not found" });
+    }
+
+    await HistoryModel.create({
+      action: "AI_STATUS_UPDATE",
+      placeName: incident.location,
+      details: `AI verification ${aiStatus}`,
+    });
+
+    res.json(incident);
+  } catch (err) {
+    console.error("Update AI status error:", err);
+    res.status(500).json({ error: "Failed to update AI status" });
+  }
+};
+
+const forceApproveIncident = async (req, res) => {
+  try {
+    const previousIncident = await IncidentModel.findById(req.params.id).select(
+      "status aiStatus isPublic forceApproved approvedByMDRRMO"
+    );
+
+    const updatedIncident = await IncidentModel.findByIdAndUpdate(
+      req.params.id,
+      {
+        forceApproved: true,
+        approvedByMDRRMO: true,
+        isPublic: true,
+        status: "approved",
+      },
+      { new: true }
+    );
+
+    if (!updatedIncident) {
+      return res.status(404).json({ message: "Incident not found" });
+    }
+
+    console.log("[incident approval]", {
+      id: String(updatedIncident._id),
+      status: updatedIncident.status,
+      forceApproved: updatedIncident.forceApproved,
+      isPublic: updatedIncident.isPublic,
+      approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+    });
+    console.log("[verification update]", {
+      incidentId: String(updatedIncident._id),
+      status: updatedIncident.status,
+      isPublic: updatedIncident.isPublic,
+      approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+      forceApproved: updatedIncident.forceApproved,
+      reporterUserId: updatedIncident.reporterUserId || null,
+      userId: updatedIncident.userId || null,
+      ...getNotificationStorageDebugInfo(),
+    });
+    console.log("[public status]", {
+      id: String(updatedIncident._id),
+      isPublic: updatedIncident.isPublic,
+      aiStatus: updatedIncident.aiStatus,
+      forceApproved: updatedIncident.forceApproved,
+      approvedByMDRRMO: updatedIncident.approvedByMDRRMO,
+    });
+
+    await HistoryModel.create({
+      action: "MDRRMO_FORCE_APPROVE",
+      placeName: updatedIncident.location,
+      details: "Incident force approved by MDRRMO/Admin.",
+    });
+
+    if (isPublicIncident(updatedIncident) && !isPublicIncident(previousIncident)) {
+      await publishIncidentIfPublic(updatedIncident, {
+        excludeUsername: updatedIncident.usernames,
+        excludePhone: updatedIncident.phone,
+      });
+    }
+
+    if (isPublicIncident(updatedIncident)) {
+      await notifyReporterIncidentApproved(req, updatedIncident);
+    }
+
+    res.json(updatedIncident);
+  } catch (err) {
+    console.error("Force approve incident error:", err);
+    res.status(500).json({ error: "Failed to force approve incident" });
+  }
+};
+
+const reverifyIncident = async (req, res) => {
+  try {
+    const incident = await IncidentModel.findById(req.params.id);
+    if (!incident) {
+      return res.status(404).json({ message: "Incident not found" });
+    }
+
+    await IncidentModel.findByIdAndUpdate(req.params.id, {
+      aiStatus: "pending",
+      isPublic: false,
+      "aiReview.status": "pending",
+      "aiReview.reviewedAt": new Date(),
+    });
+
+    const image = incident?.image?.fileUrl ? incident.image : incident?.images?.[0];
+    const aiResult = await verifyIncidentImageWithAI({ incident, image });
+    const verifiedIncident = await applyIncidentAIResult(incident._id, aiResult);
+
+    res.json(verifiedIncident);
+  } catch (err) {
+    console.error("Reverify incident error:", err);
+    res.status(500).json({ error: "Failed to re-verify incident" });
   }
 };
 
@@ -938,6 +1538,9 @@ const getIncidentStats = async (req, res) => {
   try {
     const stats = await IncidentModel.aggregate([
       {
+        $match: PUBLIC_INCIDENT_QUERY,
+      },
+      {
         $group: {
           _id: "$status",
           count: { $sum: 1 },
@@ -953,12 +1556,13 @@ const getIncidentStats = async (req, res) => {
     };
 
     stats.forEach((item) => {
-      if (item._id === "reported" || item._id === "" || item._id === null) {
+      const normalizedStatus = normalizeStatus(item._id);
+      if (normalizedStatus === "reported" || normalizedStatus === "") {
         result.reported += item.count;
-      } else if (item._id === "onProcess") {
-        result.onProcess = item.count;
-      } else if (item._id === "resolved") {
-        result.resolved = item.count;
+      } else if (normalizedStatus === "on process") {
+        result.onProcess += item.count;
+      } else if (normalizedStatus === "resolved") {
+        result.resolved += item.count;
       }
     });
 
@@ -975,6 +1579,9 @@ const getIncidentStats = async (req, res) => {
 const getIncidentTypeStats = async (req, res) => {
   try {
     const stats = await IncidentModel.aggregate([
+      {
+        $match: PUBLIC_INCIDENT_QUERY,
+      },
       {
         $group: {
           _id: "$type",
@@ -999,6 +1606,9 @@ const getTrend = async (req, res) => {
   try {
     const data = await IncidentModel.aggregate([
       {
+        $match: PUBLIC_INCIDENT_QUERY,
+      },
+      {
         $group: {
           _id: {
             $dateToString: {
@@ -1022,6 +1632,9 @@ module.exports = {
   getIncidents,
   registerIncident,
   updateStatus,
+  updateAIStatus,
+  forceApproveIncident,
+  reverifyIncident,
   deleteIncident,
   getIncidentStats,
   getIncidentTypeStats,

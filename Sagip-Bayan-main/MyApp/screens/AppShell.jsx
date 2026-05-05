@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useCallback } from "react";
-import { View, StyleSheet } from "react-native";
+import React, { useMemo, useState, useCallback, useContext, useEffect, useRef } from "react";
+import { AppState, View, StyleSheet } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 
@@ -18,14 +18,16 @@ import DonationScreen from "./DonationScreen";
 import Settings from "./Settings";
 
 import { MapContext } from "./contexts/MapContext";
-import { NotificationProvider } from "./contexts/NotificationContext";
+import { NotificationContext, NotificationProvider } from "./contexts/NotificationContext";
+import { UserContext } from "./UserContext";
 import { useTheme } from "./contexts/ThemeContext";
 import SearchProvider from "./SearchContext";
 import api from "../lib/api";
+import { getSocket } from "../lib/socket";
 
 const Stack = createNativeStackNavigator();
 const MAP_UI_SCREENS = new Set(["Map"]);
-const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
+const INCIDENT_REFRESH_POLL_INTERVAL_MS = 5000;
 
 function normalizeIncidentStatus(status) {
   return String(status || "")
@@ -36,7 +38,21 @@ function normalizeIncidentStatus(status) {
 }
 
 function isPublicIncident(status) {
-  return PUBLIC_INCIDENT_STATUSES.includes(normalizeIncidentStatus(status));
+  const normalizedStatus =
+    typeof status === "object"
+      ? normalizeIncidentStatus(status?.status)
+      : normalizeIncidentStatus(status);
+
+  if (typeof status === "object") {
+    return (
+      status?.isPublic === true ||
+      status?.forceApproved === true ||
+      status?.approvedByMDRRMO === true ||
+      normalizedStatus === "approved"
+    );
+  }
+
+  return normalizedStatus === "approved";
 }
 
 function getIncidentCoordinate(incident, keys) {
@@ -82,12 +98,12 @@ export default function AppShell() {
 
   const [incidents, setIncidents] = useState([]);
 
-  const refreshIncidents = useCallback(async () => {
+  const refreshIncidents = useCallback(async (reason = "manual") => {
     const res = await api.get("/incident/getIncidents");
     const fetchedIncidents = Array.isArray(res.data) ? res.data : [];
     const rawStatuses = fetchedIncidents.map((incident) => incident?.status);
     const publicIncidents = fetchedIncidents.filter((incident) =>
-      isPublicIncident(incident?.status)
+      isPublicIncident(incident)
     );
     const invalidCoordinateIncidents = publicIncidents.filter(
       (incident) => !hasValidIncidentCoordinates(incident)
@@ -96,7 +112,7 @@ export default function AppShell() {
 
     console.log("[incidents] raw count:", fetchedIncidents.length);
     console.log("[incidents] raw statuses:", rawStatuses);
-    console.log("[incidents] public visible count:", publicIncidents.length);
+    console.log("[visible incidents count]", publicIncidents.length);
     console.log(
       "[incidents] invalid coordinates:",
       invalidCoordinateIncidents.map((incident) => ({
@@ -109,6 +125,11 @@ export default function AppShell() {
     console.log("[incidents] valid marker count:", validMarkerCount);
 
     setIncidents(publicIncidents);
+    console.log("[incidents refreshed dynamically]", {
+      reason,
+      publicCount: publicIncidents.length,
+      validMarkerCount,
+    });
     return publicIncidents;
   }, []);
 
@@ -207,6 +228,7 @@ export default function AppShell() {
     <View style={styles.root}>
       <MapContext.Provider value={mapContextValue}>
         <NotificationProvider>
+          <RealtimeIncidentBridge />
           <SearchProvider>
             <AppLayout
               currentScreen={currentScreen}
@@ -307,6 +329,200 @@ export default function AppShell() {
       </MapContext.Provider>
     </View>
   );
+}
+
+function RealtimeIncidentBridge() {
+  const { user } = useContext(UserContext) || {};
+  const { refreshIncidents, setIncidents } = useContext(MapContext);
+  const { addNotification, refreshNotifications } =
+    useContext(NotificationContext) || {};
+  const lastSocketRefreshAtRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let activeSocket = null;
+    let incidentUpdatedHandler = null;
+    let incidentApprovedHandler = null;
+    let legacyIncidentApprovedHandler = null;
+    let myIncidentApprovedHandler = null;
+    let notificationNewHandler = null;
+    let joinUserRoomHandler = null;
+
+    const mergePublicIncident = (incident, eventName) => {
+      if (!isPublicIncident(incident)) return;
+
+      setIncidents((prev) => {
+        const current = Array.isArray(prev) ? prev : [];
+        const exists = current.some((item) => item?._id === incident?._id);
+        const next = exists
+          ? current.map((item) => (item?._id === incident?._id ? incident : item))
+          : [incident, ...current];
+
+        console.log("[map updated with public incidents]", {
+          source: eventName,
+          publicCount: next.length,
+        });
+        return next;
+      });
+    };
+
+    const refreshFromSocket = (eventName, incident) => {
+      console.log("[incident socket received]", {
+        eventName,
+        id: incident?._id || "",
+        status: incident?.status || "",
+      });
+
+      mergePublicIncident(incident, eventName);
+
+      const now = Date.now();
+      if (now - lastSocketRefreshAtRef.current < 1200) return;
+      lastSocketRefreshAtRef.current = now;
+
+      refreshIncidents?.(`socket:${eventName}`).catch((err) => {
+        console.log("[incidents] dynamic refresh failed:", err?.message || err);
+      });
+    };
+
+    async function connectRealtime() {
+      try {
+        const socket = await getSocket();
+        if (cancelled) return;
+
+        activeSocket = socket;
+
+        joinUserRoomHandler = () => {
+          if (user?._id) {
+            socket.emit("joinRoom", String(user._id));
+          }
+        };
+
+        joinUserRoomHandler();
+        socket.off("connect", joinUserRoomHandler);
+        socket.on("connect", joinUserRoomHandler);
+
+        incidentUpdatedHandler = (incident) => {
+          refreshFromSocket("incident:updated", incident);
+        };
+
+        incidentApprovedHandler = (incident) => {
+          refreshFromSocket("incident:approved", incident);
+        };
+
+        legacyIncidentApprovedHandler = (incident) => {
+          refreshFromSocket("incidentApproved", incident);
+        };
+
+        myIncidentApprovedHandler = (incident) => {
+          refreshFromSocket("myIncidentApproved", incident);
+          refreshNotifications?.();
+        };
+
+        notificationNewHandler = (notification) => {
+          console.log("[notification received dynamically]", {
+            id: notification?._id || notification?.id || "",
+            type: notification?.type || "",
+            incidentId: notification?.incidentId || notification?.referenceId || "",
+          });
+
+          addNotification?.(notification);
+          refreshNotifications?.();
+        };
+
+        socket.off("incident:updated", incidentUpdatedHandler);
+        socket.off("incident:approved", incidentApprovedHandler);
+        socket.off("incidentApproved", legacyIncidentApprovedHandler);
+        socket.off("myIncidentApproved", myIncidentApprovedHandler);
+        socket.off("notification:new", notificationNewHandler);
+        socket.on("incident:updated", incidentUpdatedHandler);
+        socket.on("incident:approved", incidentApprovedHandler);
+        socket.on("incidentApproved", legacyIncidentApprovedHandler);
+        socket.on("myIncidentApproved", myIncidentApprovedHandler);
+        socket.on("notification:new", notificationNewHandler);
+      } catch (err) {
+        console.log("[socket] incident realtime failed:", err?.message || err);
+      }
+    }
+
+    connectRealtime();
+
+    return () => {
+      cancelled = true;
+      if (activeSocket) {
+        if (incidentUpdatedHandler) {
+          activeSocket.off("incident:updated", incidentUpdatedHandler);
+        }
+        if (incidentApprovedHandler) {
+          activeSocket.off("incident:approved", incidentApprovedHandler);
+        }
+        if (legacyIncidentApprovedHandler) {
+          activeSocket.off("incidentApproved", legacyIncidentApprovedHandler);
+        }
+        if (myIncidentApprovedHandler) {
+          activeSocket.off("myIncidentApproved", myIncidentApprovedHandler);
+        }
+        if (notificationNewHandler) {
+          activeSocket.off("notification:new", notificationNewHandler);
+        }
+        if (joinUserRoomHandler) {
+          activeSocket.off("connect", joinUserRoomHandler);
+        }
+      }
+    };
+  }, [addNotification, refreshIncidents, refreshNotifications, setIncidents, user?._id]);
+
+  useEffect(() => {
+    let intervalId = null;
+    let polling = false;
+
+    const refreshDynamicData = async (reason) => {
+      if (polling) return;
+      polling = true;
+
+      try {
+        await refreshIncidents?.(reason);
+        await refreshNotifications?.();
+      } catch (err) {
+        console.log("[incidents] dynamic polling failed:", err?.message || err);
+      } finally {
+        polling = false;
+      }
+    };
+
+    const startPolling = () => {
+      if (intervalId) return;
+      intervalId = setInterval(() => {
+        refreshDynamicData("polling");
+      }, INCIDENT_REFRESH_POLL_INTERVAL_MS);
+    };
+
+    const stopPolling = () => {
+      if (!intervalId) return;
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    if (AppState.currentState === "active") {
+      startPolling();
+    }
+
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refreshDynamicData("app-active");
+        startPolling();
+        return;
+      }
+
+      stopPolling();
+    });
+
+    return () => {
+      stopPolling();
+      subscription.remove();
+    };
+  }, [refreshIncidents, refreshNotifications]);
+
+  return null;
 }
 
 const styles = StyleSheet.create({

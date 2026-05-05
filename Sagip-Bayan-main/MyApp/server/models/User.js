@@ -9,6 +9,13 @@ const notificationSchema = new mongoose.Schema(
       lowercase: true,
     },
 
+    module: {
+      type: String,
+      default: "",
+      trim: true,
+      lowercase: true,
+    },
+
     message: {
       type: String,
       required: true,
@@ -55,6 +62,14 @@ const notificationSchema = new mongoose.Schema(
       lowercase: true,
     },
 
+    priority: {
+      type: String,
+      enum: ["normal", "high"],
+      default: "normal",
+      trim: true,
+      lowercase: true,
+    },
+
     soundType: {
       type: String,
       enum: ["notification", "normal", "danger"],
@@ -79,6 +94,29 @@ const notificationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Incident",
       default: null,
+    },
+
+    referenceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    referenceModel: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    recipientUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    recipientUserModel: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     targetBarangays: {
@@ -151,6 +189,11 @@ const notificationSchema = new mongoose.Schema(
       type: String,
       default: "",
       trim: true,
+    },
+
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
 
     createdAt: {
@@ -389,6 +432,11 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ barangay: 1, isArchived: 1 });
 userSchema.index({ "notifications.dedupeKey": 1 });
+userSchema.index({
+  "notifications.type": 1,
+  "notifications.referenceId": 1,
+  "notifications.recipientUser": 1,
+});
 
 const UserModel = mongoose.model("User", userSchema);
 

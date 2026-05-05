@@ -103,13 +103,12 @@ const INCIDENT_IMAGE_LIMIT = 2;
 const INCIDENT_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
 const SIMILAR_INCIDENT_TITLE = "Similar Incident Already Reported";
 const SIMILAR_INCIDENT_MESSAGE =
-  "An incident with the same category has already been reported near this area. Please check existing reports instead.";
+  "A similar incident has already been reported in this area. Please check the existing report instead.";
 const ROUTE_HAZARD_ROUTE_RADIUS_METERS = 100;
 const ROUTE_HAZARD_THRESHOLDS_METERS = [300, 100];
 const ROUTE_HAZARD_CHECK_INTERVAL_MS = 2500;
 const INCIDENT_CLUSTER_MIN_REPORTS = 5;
 const INCIDENT_CLUSTER_MIN_BARANGAYS = 2;
-const PUBLIC_INCIDENT_STATUSES = ["reported", "on process", "resolved"];
 
 const MODULES = [
   { key: "incident", label: "Incident" },
@@ -130,12 +129,18 @@ function normalizeIncidentStatus(status) {
   return String(status || "")
     .trim()
     .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/[_-]+/g, " ");
 }
 
-function isPublicIncident(status) {
-  return PUBLIC_INCIDENT_STATUSES.includes(normalizeIncidentStatus(status));
+function isPublicIncident(incident) {
+  const status = normalizeIncidentStatus(incident?.status);
+
+  return (
+    incident?.isPublic === true ||
+    incident?.forceApproved === true ||
+    incident?.approvedByMDRRMO === true ||
+    status === "approved"
+  );
 }
 
 function getIncidentImages(incident) {
@@ -1712,7 +1717,7 @@ const {
   const normalizedIncidents = useMemo(
     () =>
       safeArray(incidents)
-        .filter((incident) => isPublicIncident(incident?.status))
+        .filter((incident) => isPublicIncident(incident))
         .map((incident) => {
           const latitude = toNumber(
             incident?.latitude ?? incident?.lat ?? incident?.location?.lat
@@ -1737,10 +1742,10 @@ const {
 
   useEffect(() => {
     const publicVisibleCount = safeArray(incidents).filter((incident) =>
-      isPublicIncident(incident?.status)
+      isPublicIncident(incident)
     ).length;
     const invalidCoordinates = safeArray(incidents)
-      .filter((incident) => isPublicIncident(incident?.status))
+      .filter((incident) => isPublicIncident(incident))
       .filter((incident) => {
         const latitude = toNumber(incident?.latitude ?? incident?.lat ?? incident?.location?.lat);
         const longitude = toNumber(incident?.longitude ?? incident?.lng ?? incident?.location?.lng);
@@ -1753,9 +1758,14 @@ const {
         status: incident?.status,
       }));
 
-    console.log("[incidents] public visible count:", publicVisibleCount);
+    console.log("[incidents fetched]", safeArray(incidents).length);
+    console.log("[visible incidents count]", publicVisibleCount);
     console.log("[incidents] invalid coordinates:", invalidCoordinates);
-    console.log("[incidents] valid marker count:", normalizedIncidents.length);
+    console.log("[markers rendered]", normalizedIncidents.length);
+    console.log("[map updated with public incidents]", {
+      publicCount: publicVisibleCount,
+      markerCount: normalizedIncidents.length,
+    });
   }, [incidents, normalizedIncidents.length]);
   const { floodLayers, earthquakeLayer } = useHazardLayers({
     showFloodMap: isFlood,
@@ -1798,11 +1808,9 @@ const {
       };
 
       fetchFreshIncidents();
-      const intervalId = setInterval(fetchFreshIncidents, 15000);
 
       return () => {
         mounted = false;
-        clearInterval(intervalId);
       };
     }, [isIncident, refreshIncidents])
   );
@@ -3156,6 +3164,8 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
       description: cleanDescription,
       usernames: incidentDraft.usernames || user?.username || "",
       phone: incidentDraft.phone || user?.phone || "",
+      userId: user?._id || "",
+      reporterUserId: user?._id || "",
     };
 
     const uploadParameters = {};
@@ -3178,12 +3188,15 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
 
       if (typeof setIncidents === "function") {
         setIncidents(
-          freshIncidents.filter((incident) => isPublicIncident(incident?.status))
+          freshIncidents.filter((incident) => isPublicIncident(incident))
         );
       }
     }
 
-    Alert.alert("Incident Submitted", "The report has been recorded.");
+    Alert.alert(
+      "Incident Submitted",
+      "Your report is being verified by AI and MDRRMO. It will appear on the map once approved."
+    );
     setIncidentDraft(EMPTY_INCIDENT);
     setIncidentErrors({});
     setIncidentImage(null);
@@ -3218,6 +3231,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
   refreshIncidents,
   setIncidents,
   user?.phone,
+  user?._id,
   user?.username,
 ]);
 

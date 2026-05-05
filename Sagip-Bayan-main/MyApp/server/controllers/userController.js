@@ -1,6 +1,7 @@
 const UserModel = require("../models/User");
 const SafetyDebugLocation = require("../models/SafetyDebugLocation");
 const PostingGuideline = require("../models/Guidelines");
+const Announcement = require("../models/Announcement");
 const crypto = require("crypto");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const sendOTP = require("../utils/sendOTP");
@@ -8,6 +9,7 @@ const cloudinary = require("../config/cloudinary");
 const bcrypt = require("bcryptjs");
 
 const GUIDELINE_NOTIFICATION_LOOKBACK_DAYS = 30;
+const ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS = 30;
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -63,6 +65,29 @@ function buildGuidelineNotification(guideline) {
   };
 }
 
+function buildAnnouncementNotification(announcement) {
+  const title = sanitizeText(announcement?.title, 120) || "Untitled announcement";
+  const dedupeKey = `announcement:${announcement._id}:published`;
+
+  return {
+    type: "announcement",
+    title: "New MDRRMO Announcement",
+    message: `MDRRMO posted a new announcement: ${title}`,
+    target: "all",
+    source: "mdrrmo",
+    notificationType: "normal",
+    soundType: "notification",
+    announcementId: announcement._id,
+    sourceLabel: "MDRRMO",
+    official: true,
+    dedupeKey,
+    actionable: false,
+    read: false,
+    isRead: false,
+    createdAt: announcement.publishedNotificationSentAt || announcement.updatedAt || new Date(),
+  };
+}
+
 async function syncRecentGuidelineNotificationsForUser(user) {
   const existingDedupeKeys = new Set(
     (user.notifications || [])
@@ -110,6 +135,57 @@ async function syncRecentGuidelineNotificationsForUser(user) {
     count: missingNotifications.length,
   });
   console.log("[notifications] notification type", "guideline");
+
+  return user;
+}
+
+async function syncRecentAnnouncementNotificationsForUser(user) {
+  const existingDedupeKeys = new Set(
+    (user.notifications || [])
+      .map((item) => String(item?.dedupeKey || ""))
+      .filter(Boolean)
+  );
+  const cutoff = new Date(
+    Date.now() - ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  const publishedAnnouncements = await Announcement.find({
+    status: "published",
+    $or: [
+      { publishedNotificationSentAt: { $gte: cutoff } },
+      { updatedAt: { $gte: cutoff } },
+      { createdAt: { $gte: cutoff } },
+      { publishedNotificationSent: { $ne: true } },
+    ],
+  })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .limit(20);
+
+  const missingNotifications = publishedAnnouncements
+    .filter((announcement) => {
+      const dedupeKey = `announcement:${announcement._id}:published`;
+      return !existingDedupeKeys.has(dedupeKey);
+    })
+    .map(buildAnnouncementNotification);
+
+  console.log("[notifications] announcement sync check", {
+    userId: String(user._id),
+    publishedAnnouncements: publishedAnnouncements.length,
+    missingAnnouncementNotifications: missingNotifications.length,
+  });
+
+  if (!missingNotifications.length) {
+    return user;
+  }
+
+  user.notifications.push(...missingNotifications);
+  await user.save();
+
+  console.log("[notifications] announcement notification created:", {
+    userId: String(user._id),
+    count: missingNotifications.length,
+  });
+  console.log("[notifications] notification type", "announcement");
 
   return user;
 }
@@ -798,6 +874,7 @@ const getUserNotifications = async (req, res) => {
     }
 
     await syncRecentGuidelineNotificationsForUser(user);
+    await syncRecentAnnouncementNotificationsForUser(user);
 
     const notifications = Array.isArray(user.notifications)
       ? [...user.notifications].sort(
@@ -809,9 +886,24 @@ const getUserNotifications = async (req, res) => {
     const guidelineCount = notifications.filter(
       (item) => String(item?.type || "").toLowerCase() === "guideline"
     ).length;
+    const announcementCount = notifications.filter(
+      (item) => String(item?.type || "").toLowerCase() === "announcement"
+    ).length;
+    const incidentApprovedCount = notifications.filter(
+      (item) => String(item?.type || "").toLowerCase() === "incident_approved"
+    ).length;
 
+    console.log("[notifications] fetch storage:", {
+      userId: String(req.params.id || ""),
+      dbName: UserModel.db?.name || "",
+      notificationCollection: UserModel.collection?.name || "users",
+      notificationPath: "users.notifications",
+      total: notifications.length,
+      incidentApprovedCount,
+    });
     console.log("[notifications] types:", types);
     console.log("[notifications] guideline notifications:", guidelineCount);
+    console.log("[notifications] announcement notifications:", announcementCount);
 
     return res.json(notifications);
   } catch (err) {

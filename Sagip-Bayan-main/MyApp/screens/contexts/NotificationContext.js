@@ -73,6 +73,12 @@ const MESSAGE_META = {
     sourceLabel: "Incident Alert",
     official: true,
   },
+  incident_approved: {
+    title: "Incident Report Verified",
+    icon: "checkmark-circle-outline",
+    sourceLabel: "Incident Alert",
+    official: true,
+  },
   guideline: {
     title: "New guideline posted by MDRRMO",
     icon: "megaphone-outline",
@@ -154,6 +160,17 @@ function playNotificationSoundFor(item) {
     : playNormalNotificationSound();
 }
 
+function getNotificationDedupeKey(item) {
+  const explicitId = item?._id || item?.id;
+  if (explicitId) return `id:${String(explicitId)}`;
+  if (item?.dedupeKey) return `dedupe:${String(item.dedupeKey)}`;
+  if (item?.type && (item?.referenceId || item?.incidentId)) {
+    return `${item.type}:${String(item.referenceId || item.incidentId)}`;
+  }
+
+  return `${item?.type || "system"}:${item?.createdAt || ""}:${item?.message || ""}`;
+}
+
 function normalizeServerNotification(item) {
   const type = normalizeType(item?.type);
   const meta = MESSAGE_META[type] || MESSAGE_META.system;
@@ -174,10 +191,18 @@ function normalizeServerNotification(item) {
     icon: item?.icon || meta.icon,
     sourceLabel: item?.sourceLabel || meta.sourceLabel || null,
     source: item?.source || null,
+    module: item?.module || null,
     official: Boolean(item?.official ?? meta.official),
     notificationType: item?.notificationType || null,
+    priority: item?.priority || "normal",
     soundType: getNotificationSoundType(item),
     incidentId: item?.incidentId || null,
+    referenceId: item?.referenceId || item?.incidentId || null,
+    referenceModel: item?.referenceModel || null,
+    recipientUser: item?.recipientUser || null,
+    recipientUserModel: item?.recipientUserModel || null,
+    dedupeKey: item?.dedupeKey || "",
+    metadata: item?.metadata || {},
     read: Boolean(item?.read || item?.isRead),
     createdAt: item?.createdAt || new Date().toISOString(),
     connectionId,
@@ -204,20 +229,32 @@ export function NotificationProvider({ children }) {
   const addNotification = useCallback((event) => {
     const type = normalizeType(event?.type);
     const meta = MESSAGE_META[type] || MESSAGE_META.system;
+    const serverId = event?._id || event?.id || null;
 
     const notification = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: serverId
+        ? String(serverId)
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       type,
       title: event?.title || meta.title,
       message: event?.message || "There is a new safety update.",
       icon: event?.icon || meta.icon,
       sourceLabel: event?.sourceLabel || meta.sourceLabel || null,
+      source: event?.source || null,
+      module: event?.module || null,
       official: Boolean(event?.official ?? meta.official),
       notificationType: event?.notificationType || null,
+      priority: event?.priority || "normal",
       soundType: getNotificationSoundType(event),
       incidentId: event?.incidentId || null,
+      referenceId: event?.referenceId || event?.incidentId || null,
+      referenceModel: event?.referenceModel || null,
+      recipientUser: event?.recipientUser || null,
+      recipientUserModel: event?.recipientUserModel || null,
+      dedupeKey: event?.dedupeKey || "",
+      metadata: event?.metadata || {},
       read: false,
-      createdAt: new Date().toISOString(),
+      createdAt: event?.createdAt || new Date().toISOString(),
       connectionId: event?.connectionId || null,
       actorUserId: event?.actorUserId || null,
       actorName: event?.actorName || "",
@@ -230,7 +267,14 @@ export function NotificationProvider({ children }) {
       handledAt: event?.handledAt || null,
     };
 
-    setLocalNotifications((prev) => [notification, ...prev].slice(0, 30));
+    if (serverId) {
+      seenServerNotificationIdsRef.current.add(String(serverId));
+    }
+
+    const key = getNotificationDedupeKey(notification);
+    setLocalNotifications((prev) =>
+      [notification, ...prev.filter((item) => getNotificationDedupeKey(item) !== key)].slice(0, 30)
+    );
     playNotificationSoundFor(notification);
   }, []);
 
@@ -304,14 +348,6 @@ export function NotificationProvider({ children }) {
     };
   }, []);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refreshNotifications();
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [refreshNotifications]);
-
   const markAllRead = useCallback(async () => {
     setLocalNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
 
@@ -363,8 +399,16 @@ export function NotificationProvider({ children }) {
   );
 
   const notifications = useMemo(() => {
+    const seen = new Set();
+
     return [...serverNotifications, ...localNotifications]
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .filter((item) => {
+        const key = getNotificationDedupeKey(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .slice(0, 30);
   }, [localNotifications, serverNotifications]);
 
