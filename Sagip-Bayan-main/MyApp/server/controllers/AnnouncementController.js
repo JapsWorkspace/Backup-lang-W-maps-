@@ -99,6 +99,34 @@ function buildPublishedAnnouncementNotification(announcement) {
   };
 }
 
+function getPublishedNotificationTime(announcement) {
+  const value =
+    announcement?.publishedNotificationSentAt ||
+    announcement?.updatedAt ||
+    announcement?.createdAt ||
+    null;
+  const date = value ? new Date(value) : null;
+
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function getAnnouncementClearDedupeKey(item) {
+  const type = String(item?.type || "").toLowerCase();
+
+  if (item?.dedupeKey) return String(item.dedupeKey);
+
+  const announcementId =
+    item?.announcementId ||
+    item?.metadata?.announcementId ||
+    item?.referenceId;
+
+  if (type.includes("announcement") && announcementId) {
+    return `announcement:${String(announcementId)}:published`;
+  }
+
+  return "";
+}
+
 async function ensureAnnouncementNotificationsForUser(userId, announcements = []) {
   if (!isValidObjectId(userId) || !Array.isArray(announcements) || !announcements.length) {
     return;
@@ -123,7 +151,9 @@ async function ensureAnnouncementNotificationsForUser(userId, announcements = []
     return;
   }
 
-  const user = await UserModel.findById(userId).select("notifications");
+  const user = await UserModel.findById(userId).select(
+    "notifications notificationClearedAt clearedNotificationDedupeKeys"
+  );
   if (!user) {
     console.log("[notifications] announcement sync skipped", {
       reason: "user_not_found",
@@ -132,22 +162,48 @@ async function ensureAnnouncementNotificationsForUser(userId, announcements = []
     return;
   }
 
+  const clearedAt = user.notificationClearedAt
+    ? new Date(user.notificationClearedAt)
+    : null;
   const existingDedupeKeys = new Set(
-    (user.notifications || [])
-      .map((item) => String(item?.dedupeKey || ""))
+    [
+      ...(user.notifications || []).map(getAnnouncementClearDedupeKey),
+      ...(user.clearedNotificationDedupeKeys || []),
+    ]
+      .map((key) => String(key || ""))
       .filter(Boolean)
   );
+  let skippedExistingOrCleared = 0;
+  let skippedBeforeClear = 0;
+
   const missingNotifications = recentPublishedAnnouncements
     .filter((announcement) => {
       const dedupeKey = `announcement:${announcement._id}:published`;
-      return !existingDedupeKeys.has(dedupeKey);
+      if (existingDedupeKeys.has(dedupeKey)) {
+        skippedExistingOrCleared += 1;
+        return false;
+      }
+
+      if (clearedAt) {
+        const publishedTime = getPublishedNotificationTime(announcement);
+        if (publishedTime && publishedTime <= clearedAt) {
+          skippedBeforeClear += 1;
+          return false;
+        }
+      }
+
+      return true;
     })
     .map(buildPublishedAnnouncementNotification);
 
   console.log("[notifications] announcement sync check", {
     userId: String(userId),
     publishedAnnouncements: recentPublishedAnnouncements.length,
+    notificationClearedAt: user.notificationClearedAt || null,
+    clearedKeys: user.clearedNotificationDedupeKeys?.length || 0,
     missingAnnouncementNotifications: missingNotifications.length,
+    skippedExistingOrCleared,
+    skippedBeforeClear,
   });
 
   if (!missingNotifications.length) {

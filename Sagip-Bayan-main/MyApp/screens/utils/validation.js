@@ -87,7 +87,36 @@ export function sanitizeReferenceText(value, maxLength = 80) {
 }
 
 export function sanitizeIncidentText(value, maxLength = INCIDENT_DESCRIPTION_MAX_LENGTH) {
-  return sanitizeTextInput(value, { maxLength }).replace(/[^A-Za-z0-9\s,.-]/g, "");
+  return sanitizeTextInput(value, { maxLength }).replace(/[^A-Za-z0-9\s,.\-()/#]/g, "");
+}
+
+export function sanitizeFreeTextInput(
+  value,
+  maxLength = INCIDENT_DESCRIPTION_MAX_LENGTH
+) {
+  const cleaned = asString(value)
+    .replace(INVISIBLE_WHITESPACE_REGEX, "")
+    .replace(/[<>]/g, "")
+    .replace(/\s{3,}/g, "  ");
+
+  return typeof maxLength === "number" && maxLength >= 0
+    ? cleaned.slice(0, maxLength)
+    : cleaned;
+}
+
+export function sanitizeFreeTextOnSubmit(
+  value,
+  maxLength = INCIDENT_DESCRIPTION_MAX_LENGTH
+) {
+  const cleaned = asString(value)
+    .replace(INVISIBLE_WHITESPACE_REGEX, "")
+    .replace(/[<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return typeof maxLength === "number" && maxLength >= 0
+    ? cleaned.slice(0, maxLength)
+    : cleaned;
 }
 
 export function normalizeEmail(value) {

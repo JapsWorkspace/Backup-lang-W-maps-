@@ -16,7 +16,7 @@ import PersonalDetails from "./PersonalDetails";
 import PasswordSecurity from "./PasswordSecurity";
 import DonationScreen from "./DonationScreen";
 import Settings from "./Settings";
-
+import DigitalTwinScreen from "./DigitalTwinScreen";
 import { MapContext } from "./contexts/MapContext";
 import { NotificationContext, NotificationProvider } from "./contexts/NotificationContext";
 import { UserContext } from "./UserContext";
@@ -250,6 +250,13 @@ export default function AppShell() {
                     focus: () => setCurrentScreen("MainCenter"),
                   }}
                 />
+                <Stack.Screen
+  name="DigitalTwin"
+  component={DigitalTwinScreen}
+  listeners={{
+    focus: () => setCurrentScreen("DigitalTwin"),
+  }}
+/>
                 <Stack.Screen
                   name="Profile"
                   component={Profile}

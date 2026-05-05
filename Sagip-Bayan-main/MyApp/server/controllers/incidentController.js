@@ -96,7 +96,7 @@ function sanitizePhone(value) {
 }
 
 function sanitizeIncidentText(value, max = 500) {
-  return sanitizeText(value, max).replace(/[^A-Za-z0-9\s,.-]/g, "");
+  return sanitizeText(value, max).replace(/[^A-Za-z0-9\s,.\-()/#]/g, "");
 }
 
 function sanitizeAlphaNumericText(value, max = 120) {

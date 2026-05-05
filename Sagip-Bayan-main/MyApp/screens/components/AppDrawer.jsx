@@ -63,10 +63,9 @@ const RESOURCE_ITEMS = [
     route: "Announcement",
   },
   {
-    icon: "map-outline",
-    label: "Digital Twin",
-    route: "Map",
-    params: { module: "barangay" },
+  icon: "water-outline",
+  label: "Digital Twin",
+  route: "DigitalTwin",
   },
   {
     icon: "cube-outline",

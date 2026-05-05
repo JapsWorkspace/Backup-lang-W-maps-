@@ -75,6 +75,34 @@ function buildPublishedGuidelineNotification(guideline) {
   };
 }
 
+function getPublishedNotificationTime(guideline) {
+  const value =
+    guideline?.publishedNotificationSentAt ||
+    guideline?.updatedAt ||
+    guideline?.createdAt ||
+    null;
+  const date = value ? new Date(value) : null;
+
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function getGuidelineClearDedupeKey(item) {
+  const type = String(item?.type || "").toLowerCase();
+
+  if (item?.dedupeKey) return String(item.dedupeKey);
+
+  const guidelineId =
+    item?.guidelineId ||
+    item?.metadata?.guidelineId ||
+    item?.referenceId;
+
+  if (type.includes("guideline") && guidelineId) {
+    return `guideline:${String(guidelineId)}:published`;
+  }
+
+  return "";
+}
+
 async function ensureGuidelineNotificationsForUser(userId, guidelines = []) {
   if (!isValidObjectId(userId) || !Array.isArray(guidelines) || !guidelines.length) {
     return;
@@ -96,7 +124,9 @@ async function ensureGuidelineNotificationsForUser(userId, guidelines = []) {
     return;
   }
 
-  const user = await UserModel.findById(userId).select("notifications");
+  const user = await UserModel.findById(userId).select(
+    "notifications notificationClearedAt clearedNotificationDedupeKeys"
+  );
   if (!user) {
     console.log("[notifications] guideline sync skipped", {
       reason: "user_not_found",
@@ -105,22 +135,48 @@ async function ensureGuidelineNotificationsForUser(userId, guidelines = []) {
     return;
   }
 
+  const clearedAt = user.notificationClearedAt
+    ? new Date(user.notificationClearedAt)
+    : null;
   const existingDedupeKeys = new Set(
-    (user.notifications || [])
-      .map((item) => String(item?.dedupeKey || ""))
+    [
+      ...(user.notifications || []).map(getGuidelineClearDedupeKey),
+      ...(user.clearedNotificationDedupeKeys || []),
+    ]
+      .map((key) => String(key || ""))
       .filter(Boolean)
   );
+  let skippedExistingOrCleared = 0;
+  let skippedBeforeClear = 0;
+
   const missingNotifications = recentPublishedGuidelines
     .filter((guideline) => {
       const dedupeKey = `guideline:${guideline._id}:published`;
-      return !existingDedupeKeys.has(dedupeKey);
+      if (existingDedupeKeys.has(dedupeKey)) {
+        skippedExistingOrCleared += 1;
+        return false;
+      }
+
+      if (clearedAt) {
+        const publishedTime = getPublishedNotificationTime(guideline);
+        if (publishedTime && publishedTime <= clearedAt) {
+          skippedBeforeClear += 1;
+          return false;
+        }
+      }
+
+      return true;
     })
     .map(buildPublishedGuidelineNotification);
 
   console.log("[notifications] guideline sync check", {
     userId: String(userId),
     publishedGuidelines: recentPublishedGuidelines.length,
+    notificationClearedAt: user.notificationClearedAt || null,
+    clearedKeys: user.clearedNotificationDedupeKeys?.length || 0,
     missingGuidelineNotifications: missingNotifications.length,
+    skippedExistingOrCleared,
+    skippedBeforeClear,
   });
 
   if (!missingNotifications.length) {
