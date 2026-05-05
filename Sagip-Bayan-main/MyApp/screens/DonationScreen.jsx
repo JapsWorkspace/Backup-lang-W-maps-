@@ -1,4 +1,10 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +23,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
 
-import { getMyDonations, submitDonation as submitDonationApi } from "../lib/donationApi";
+import {
+  getMyDonations,
+  submitDonation as submitDonationApi,
+} from "../lib/donationApi";
 import { UserContext } from "./UserContext";
 import { ThemeContext } from "./contexts/ThemeContext";
 import useFormAutoScroll from "./hooks/useFormAutoScroll";
@@ -26,20 +35,45 @@ import {
   sanitizeReferenceText,
 } from "./utils/validation";
 
-const OFFLINE_QUEUE_KEY = "sagip_bayan_donation_queue_v2";
+const OFFLINE_QUEUE_KEY = "sagip_bayan_donation_queue_v3";
 
 const STATUS_META = {
   pending: { label: "Pending", color: "#B45309", bg: "#FEF3C7" },
   accepted: { label: "Accepted", color: "#166534", bg: "#DCFCE7" },
+  received: { label: "Received", color: "#166534", bg: "#DCFCE7" },
+  not_received: { label: "Not Received", color: "#991B1B", bg: "#FEE2E2" },
+  resubmitted: { label: "Resubmitted", color: "#1D4ED8", bg: "#DBEAFE" },
   in_transit: { label: "In Transit", color: "#1D4ED8", bg: "#DBEAFE" },
   delivered: { label: "Delivered", color: "#14532D", bg: "#BBF7D0" },
   rejected: { label: "Rejected", color: "#991B1B", bg: "#FEE2E2" },
 };
 
 const INITIAL_FORM = {
+  donorName: "",
+  donorPhone: "",
+  donorEmail: "",
   amount: "",
   gcashReferenceNumber: "",
+  description: "",
 };
+
+function getUserDisplayName(user) {
+  return (
+    user?.fullName ||
+    user?.name ||
+    user?.username ||
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+    ""
+  );
+}
+
+function getUserPhone(user) {
+  return user?.phone || user?.contactNumber || user?.mobileNumber || "";
+}
+
+function getUserEmail(user) {
+  return user?.email || "";
+}
 
 export default function DonationScreen({ navigation }) {
   const { user } = useContext(UserContext) || {};
@@ -55,7 +89,19 @@ export default function DonationScreen({ navigation }) {
   const [submitting, setSubmitting] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const [errors, setErrors] = useState({});
+
   const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
+
+  useEffect(() => {
+    if (!user) return;
+
+    setForm((prev) => ({
+      ...prev,
+      donorName: prev.donorName || getUserDisplayName(user),
+      donorPhone: prev.donorPhone || getUserPhone(user),
+      donorEmail: prev.donorEmail || getUserEmail(user),
+    }));
+  }, [user]);
 
   const updateField = (key, value) => {
     setErrors((prev) => ({ ...prev, [key]: "" }));
@@ -70,9 +116,10 @@ export default function DonationScreen({ navigation }) {
 
     setHistoryLoading(true);
     setHistoryError("");
+
     try {
       const donations = await getMyDonations(user._id);
-      setHistory(donations);
+      setHistory(Array.isArray(donations) ? donations : []);
     } catch (err) {
       console.log("[donations] history failed:", err?.message);
       setHistoryError("Unable to load donation history.");
@@ -82,24 +129,39 @@ export default function DonationScreen({ navigation }) {
     }
   }, [user?._id]);
 
+  const submitDonationPayload = async (payload, selectedPhoto) => {
+    return submitDonationApi(payload, selectedPhoto);
+  };
+
   const syncQueuedDonations = useCallback(async () => {
-    const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
-    const queue = raw ? JSON.parse(raw) : [];
-    setQueuedCount(queue.length);
-    if (!queue.length) return;
+    try {
+      const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+      const queue = raw ? JSON.parse(raw) : [];
 
-    const remaining = [];
-    for (const queued of queue) {
-      try {
-        await submitDonationPayload(queued.payload, queued.photo);
-      } catch (_) {
-        remaining.push(queued);
+      setQueuedCount(queue.length);
+
+      if (!queue.length) return;
+
+      const remaining = [];
+
+      for (const queued of queue) {
+        try {
+          await submitDonationPayload(queued.payload, queued.photo);
+        } catch (err) {
+          console.log("[donations] queued sync failed:", err?.message);
+          remaining.push(queued);
+        }
       }
-    }
 
-    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
-    setQueuedCount(remaining.length);
-    if (remaining.length !== queue.length) fetchHistory();
+      await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+      setQueuedCount(remaining.length);
+
+      if (remaining.length !== queue.length) {
+        fetchHistory();
+      }
+    } catch (err) {
+      console.log("[donations] sync queue failed:", err?.message);
+    }
   }, [fetchHistory]);
 
   useEffect(() => {
@@ -108,38 +170,80 @@ export default function DonationScreen({ navigation }) {
   }, [fetchHistory, syncQueuedDonations]);
 
   const resetForm = () => {
-    setForm(INITIAL_FORM);
+    setForm({
+      ...INITIAL_FORM,
+      donorName: getUserDisplayName(user),
+      donorPhone: getUserPhone(user),
+      donorEmail: getUserEmail(user),
+    });
     setPhoto(null);
+    setErrors({});
   };
 
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: false,
-      quality: 0.72,
-    });
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    setPhoto({
-      uri: asset.uri,
-      name: asset.fileName || asset.uri?.split("/")?.pop() || `donation-${Date.now()}.jpg`,
-      type: asset.mimeType || "image/jpeg",
-    });
+      if (!permission.granted) {
+        Alert.alert(
+          "Permission needed",
+          "Please allow photo access to upload your GCash receipt or screenshot."
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: false,
+        quality: 0.72,
+      });
+
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+
+      setErrors((prev) => ({ ...prev, photo: "" }));
+      setPhoto({
+        uri: asset.uri,
+        name:
+          asset.fileName ||
+          asset.uri?.split("/")?.pop() ||
+          `donation-proof-${Date.now()}.jpg`,
+        type: asset.mimeType || "image/jpeg",
+      });
+    } catch (err) {
+      console.log("[donations] pick image failed:", err?.message);
+      Alert.alert("Upload failed", "Unable to select an image right now.");
+    }
   };
 
   const buildPayload = () => {
     const nextErrors = {};
+
     const cleanAmount = sanitizeAmount(form.amount);
     const amount = Number(cleanAmount);
-    const gcashReferenceNumber = sanitizeReferenceText(form.gcashReferenceNumber);
+
+    const gcashReferenceNumber = sanitizeReferenceText(
+      form.gcashReferenceNumber
+    );
+
+    const donorName = String(form.donorName || "").trim();
+    const donorPhone = String(form.donorPhone || "").trim();
+    const donorEmail = String(form.donorEmail || "").trim();
+    const description = String(form.description || "").trim();
+
+    if (!donorName) {
+      nextErrors.donorName = "Donor name is required.";
+    }
 
     if (!Number.isFinite(amount) || amount <= 0) {
       nextErrors.amount = "Enter a valid donation amount.";
     }
+
     if (!gcashReferenceNumber) {
       nextErrors.gcashReferenceNumber = "Reference number is required.";
     }
+
     if (!photo?.uri) {
       nextErrors.photo = "Upload your GCash receipt or screenshot.";
     }
@@ -150,19 +254,45 @@ export default function DonationScreen({ navigation }) {
     }
 
     return {
-      donationType: "monetary",
       donorUserId: user?._id || "",
+
+      inventoryType: "monetary",
+      donationType: "monetary",
+      category: "money",
+
       amount: String(amount),
-      paymentMethod: "GCash",
-      gcashReferenceNumber,
+      quantity: "0",
+      unit: "",
+
+      paymentMethod: "gcash",
       referenceNumber: gcashReferenceNumber,
-      description: "GCash monetary donation.",
+      gcashReferenceNumber,
+
+      donorName,
+      donorPhone,
+      donorEmail,
+      contactInfo: donorPhone || donorEmail,
+
+      sourceType: "external",
+      fulfillmentMethod: "drop_off",
+
+      itemName: "",
+      condition: "",
+      usageDuration: "",
+      requiresExpiration: "false",
+
+      description: description || "GCash monetary donation.",
+      location: "",
+      barangay: "",
+      latitude: "",
+      longitude: "",
     };
   };
 
   const queueDonation = async (payload, selectedPhoto) => {
     const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
     const queue = raw ? JSON.parse(raw) : [];
+
     const next = [
       ...queue,
       {
@@ -172,6 +302,7 @@ export default function DonationScreen({ navigation }) {
         queuedAt: new Date().toISOString(),
       },
     ];
+
     await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(next));
     setQueuedCount(next.length);
   };
@@ -179,27 +310,39 @@ export default function DonationScreen({ navigation }) {
   const submitDonation = async () => {
     try {
       setSubmitting(true);
+
       const payload = buildPayload();
       setErrors({});
 
       try {
         await submitDonationPayload(payload, photo);
       } catch (networkErr) {
+        console.log("[donations] submit failed:", networkErr?.message);
+
         await queueDonation(payload, photo);
+
         Alert.alert(
           "Saved offline",
           "Your donation was saved and will sync when the server is reachable."
         );
+
         resetForm();
         return;
       }
 
-      Alert.alert("Donation submitted", "Your donation is pending MDRRMO review.");
+      Alert.alert(
+        "Donation submitted",
+        "Your monetary donation is pending MDRRMO review."
+      );
+
       resetForm();
       setActiveTab("history");
       fetchHistory();
     } catch (err) {
-      Alert.alert("Donation details needed", err?.message || "Please check the form.");
+      Alert.alert(
+        "Donation details needed",
+        err?.message || "Please check the form."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -213,107 +356,128 @@ export default function DonationScreen({ navigation }) {
         keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
       >
         <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="chevron-back" size={21} color={theme.primary} />
-          </TouchableOpacity>
-          <View style={styles.headerCopy}>
-            <Text style={styles.title}>Donations</Text>
-            <Text style={styles.subtitle}>Send support to MDRRMO for disaster response.</Text>
+          ref={scrollRef}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.header}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="chevron-back" size={21} color={theme.primary} />
+            </TouchableOpacity>
+
+            <View style={styles.headerCopy}>
+              <Text style={styles.title}>Monetary Donation</Text>
+              <Text style={styles.subtitle}>
+                Send GCash support to MDRRMO for disaster response.
+              </Text>
+            </View>
           </View>
-        </View>
 
-        {queuedCount > 0 && (
-          <TouchableOpacity style={styles.offlineBanner} onPress={syncQueuedDonations}>
-            <Ionicons name="cloud-upload-outline" size={17} color="#92400E" />
-            <Text style={styles.offlineText}>{queuedCount} donation(s) waiting to sync</Text>
-          </TouchableOpacity>
-        )}
+          {queuedCount > 0 && (
+            <TouchableOpacity
+              style={styles.offlineBanner}
+              onPress={syncQueuedDonations}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="cloud-upload-outline" size={17} color="#92400E" />
+              <Text style={styles.offlineText}>
+                {queuedCount} donation(s) waiting to sync
+              </Text>
+            </TouchableOpacity>
+          )}
 
-        <View style={styles.mainTabs}>
-          <MainTabButton
-            icon="wallet-outline"
-            label="GCash Donation"
-            active={activeTab === "form"}
-            onPress={() => {
-              setActiveTab("form");
-            }}
-            styles={styles}
-          />
-          <MainTabButton
-            icon="time-outline"
-            label="My Donation History"
-            active={activeTab === "history"}
-            onPress={() => {
-              setActiveTab("history");
-              fetchHistory();
-            }}
-            styles={styles}
-          />
-        </View>
-
-        {activeTab === "form" ? (
-          <View style={styles.panel}>
-            <Text style={styles.panelTitle}>GCash Donation</Text>
-            <Text style={styles.panelSubtitle}>
-              Submit the amount, GCash reference number, and receipt screenshot.
-            </Text>
-
-            <MonetaryFields
-              form={form}
-              updateField={updateField}
-              errors={errors}
-              registerInput={registerInput}
-              scrollToInput={scrollToInput}
-              photo={photo}
-              pickImage={pickImage}
+          <View style={styles.mainTabs}>
+            <MainTabButton
+              icon="wallet-outline"
+              label="GCash Donation"
+              active={activeTab === "form"}
+              onPress={() => setActiveTab("form")}
               styles={styles}
             />
 
-            <TouchableOpacity
-              style={[styles.submitButton, submitting && styles.disabled]}
-              onPress={submitDonation}
-              disabled={submitting}
-            >
-              {submitting ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <>
-                  <Ionicons name="send" size={18} color="#FFFFFF" />
-                  <Text style={styles.submitText}>Submit Donation</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            <MainTabButton
+              icon="time-outline"
+              label="My Donation History"
+              active={activeTab === "history"}
+              onPress={() => {
+                setActiveTab("history");
+                fetchHistory();
+              }}
+              styles={styles}
+            />
           </View>
-        ) : (
-          <HistoryPanel
-            history={history}
-            loading={historyLoading}
-            error={historyError}
-            onRetry={fetchHistory}
-            styles={styles}
-          />
-        )}
-      </ScrollView>
+
+          {activeTab === "form" ? (
+            <View style={styles.panel}>
+              <Text style={styles.panelTitle}>GCash Monetary Donation</Text>
+
+              <Text style={styles.panelSubtitle}>
+                Submit the amount, GCash reference number, and proof of
+                transaction.
+              </Text>
+
+              <MonetaryFields
+                form={form}
+                updateField={updateField}
+                errors={errors}
+                registerInput={registerInput}
+                scrollToInput={scrollToInput}
+                photo={photo}
+                pickImage={pickImage}
+                styles={styles}
+              />
+
+              <TouchableOpacity
+                style={[styles.submitButton, submitting && styles.disabled]}
+                onPress={submitDonation}
+                disabled={submitting}
+                activeOpacity={0.85}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="send" size={18} color="#FFFFFF" />
+                    <Text style={styles.submitText}>Submit Donation</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <HistoryPanel
+              history={history}
+              loading={historyLoading}
+              error={historyError}
+              onRetry={fetchHistory}
+              styles={styles}
+            />
+          )}
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-async function submitDonationPayload(payload, photo) {
-  return submitDonationApi(payload, photo);
-}
-
 function MainTabButton({ icon, label, active, onPress, styles }) {
   return (
-    <TouchableOpacity style={[styles.mainTabButton, active && styles.mainTabButtonActive]} onPress={onPress}>
-      <Ionicons name={icon} size={17} color={active ? "#FFFFFF" : styles.iconColor} />
-      <Text style={[styles.mainTabText, active && styles.mainTabTextActive]}>{label}</Text>
+    <TouchableOpacity
+      style={[styles.mainTabButton, active && styles.mainTabButtonActive]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <Ionicons
+        name={icon}
+        size={17}
+        color={active ? "#FFFFFF" : styles.iconColor}
+      />
+      <Text style={[styles.mainTabText, active && styles.mainTabTextActive]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -322,9 +486,61 @@ function FieldError({ message, styles }) {
   return message ? <Text style={styles.fieldError}>{message}</Text> : null;
 }
 
-function MonetaryFields({ form, updateField, errors, registerInput, scrollToInput, photo, pickImage, styles }) {
+function MonetaryFields({
+  form,
+  updateField,
+  errors,
+  registerInput,
+  scrollToInput,
+  photo,
+  pickImage,
+  styles,
+}) {
   return (
     <>
+      <Field label="Donor name" styles={styles}>
+        <TextInput
+          style={styles.input}
+          placeholder="Full name"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.donorName}
+          onFocus={() => scrollToInput("donorName")}
+          onLayout={registerInput("donorName")}
+          onChangeText={(value) => updateField("donorName", value)}
+          maxLength={120}
+        />
+        <FieldError message={errors.donorName} styles={styles} />
+      </Field>
+
+      <Field label="Contact number" styles={styles}>
+        <TextInput
+          style={styles.input}
+          keyboardType="phone-pad"
+          placeholder="Mobile number"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.donorPhone}
+          onFocus={() => scrollToInput("donorPhone")}
+          onLayout={registerInput("donorPhone")}
+          onChangeText={(value) => updateField("donorPhone", value)}
+          maxLength={40}
+        />
+      </Field>
+
+      <Field label="Email address" styles={styles}>
+        <TextInput
+          style={styles.input}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          placeholder="Email address"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.donorEmail}
+          onFocus={() => scrollToInput("donorEmail")}
+          onLayout={registerInput("donorEmail")}
+          onChangeText={(value) => updateField("donorEmail", value)}
+          maxLength={120}
+        />
+      </Field>
+
       <Field label="Amount" styles={styles}>
         <TextInput
           style={styles.input}
@@ -339,6 +555,7 @@ function MonetaryFields({ form, updateField, errors, registerInput, scrollToInpu
         />
         <FieldError message={errors.amount} styles={styles} />
       </Field>
+
       <Field label="GCash reference number" styles={styles}>
         <TextInput
           style={styles.input}
@@ -347,13 +564,33 @@ function MonetaryFields({ form, updateField, errors, registerInput, scrollToInpu
           value={form.gcashReferenceNumber}
           onFocus={() => scrollToInput("gcashReferenceNumber")}
           onLayout={registerInput("gcashReferenceNumber")}
-          onChangeText={(value) => updateField("gcashReferenceNumber", sanitizeReferenceText(value))}
+          onChangeText={(value) =>
+            updateField("gcashReferenceNumber", sanitizeReferenceText(value))
+          }
           maxLength={80}
         />
         <FieldError message={errors.gcashReferenceNumber} styles={styles} />
       </Field>
 
-      <TouchableOpacity style={styles.uploadBox} onPress={pickImage} activeOpacity={0.85}>
+      <Field label="Message or note" styles={styles}>
+        <TextInput
+          style={[styles.input, styles.textArea]}
+          placeholder="Optional message"
+          placeholderTextColor={styles.placeholderColor}
+          value={form.description}
+          multiline
+          onFocus={() => scrollToInput("description")}
+          onLayout={registerInput("description")}
+          onChangeText={(value) => updateField("description", value)}
+          maxLength={500}
+        />
+      </Field>
+
+      <TouchableOpacity
+        style={styles.uploadBox}
+        onPress={pickImage}
+        activeOpacity={0.85}
+      >
         {photo?.uri ? (
           <>
             <Image source={{ uri: photo.uri }} style={styles.previewImage} />
@@ -363,10 +600,13 @@ function MonetaryFields({ form, updateField, errors, registerInput, scrollToInpu
           <>
             <Ionicons name="image-outline" size={24} color={styles.iconColor} />
             <Text style={styles.uploadTitle}>Upload GCash proof</Text>
-            <Text style={styles.uploadHint}>Receipt or screenshot is required</Text>
+            <Text style={styles.uploadHint}>
+              Receipt or screenshot is required
+            </Text>
           </>
         )}
       </TouchableOpacity>
+
       <FieldError message={errors.photo} styles={styles} />
     </>
   );
@@ -385,7 +625,10 @@ function HistoryPanel({ history, loading, error, onRetry, styles }) {
   return (
     <View style={styles.panel}>
       <Text style={styles.panelTitle}>My Donation History</Text>
-      <Text style={styles.panelSubtitle}>Track status updates and where donations are assigned.</Text>
+
+      <Text style={styles.panelSubtitle}>
+        Track your submitted monetary donations and review status.
+      </Text>
 
       {loading ? (
         <View style={styles.stateBox}>
@@ -393,7 +636,11 @@ function HistoryPanel({ history, loading, error, onRetry, styles }) {
           <Text style={styles.stateText}>Loading donations...</Text>
         </View>
       ) : error ? (
-        <TouchableOpacity style={styles.stateBox} onPress={onRetry}>
+        <TouchableOpacity
+          style={styles.stateBox}
+          onPress={onRetry}
+          activeOpacity={0.85}
+        >
           <Ionicons name="refresh-outline" size={22} color={styles.iconColor} />
           <Text style={styles.stateText}>{error}</Text>
           <Text style={styles.retryText}>Tap to retry</Text>
@@ -402,21 +649,33 @@ function HistoryPanel({ history, loading, error, onRetry, styles }) {
         <View style={styles.stateBox}>
           <Ionicons name="gift-outline" size={24} color={styles.iconColor} />
           <Text style={styles.stateTitle}>No donations yet</Text>
-          <Text style={styles.stateText}>Your submitted donations will appear here.</Text>
+          <Text style={styles.stateText}>
+            Your submitted donations will appear here.
+          </Text>
         </View>
       ) : (
-        history.map((item) => <DonationHistoryCard key={item._id} item={item} styles={styles} />)
+        history.map((item) => (
+          <DonationHistoryCard key={item._id} item={item} styles={styles} />
+        ))
       )}
     </View>
   );
 }
 
 function DonationHistoryCard({ item, styles }) {
-  const status = STATUS_META[item.status] || STATUS_META.pending;
+  const normalizedStatus = String(item.status || "pending").toLowerCase();
+  const status = STATUS_META[normalizedStatus] || STATUS_META.pending;
+
   const date = item.createdAt
-    ? new Date(item.createdAt).toLocaleDateString()
+    ? new Date(item.createdAt).toLocaleDateString("en-PH", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
     : "Date unavailable";
-  const summary = `PHP ${Number(item.amount || 0).toLocaleString("en-PH")} via GCash`;
+
+  const amount = Number(item.amount || 0);
+  const summary = `PHP ${amount.toLocaleString("en-PH")} via GCash`;
 
   return (
     <View style={styles.historyCard}>
@@ -424,20 +683,42 @@ function DonationHistoryCard({ item, styles }) {
         <View style={styles.historyIcon}>
           <Ionicons name="wallet-outline" size={18} color="#FFFFFF" />
         </View>
+
         <View style={styles.historyCopy}>
           <Text style={styles.historyTitle}>GCash Donation</Text>
           <Text style={styles.historyDate}>{date}</Text>
         </View>
+
         <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
-          <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+          <Text style={[styles.statusText, { color: status.color }]}>
+            {status.label}
+          </Text>
         </View>
       </View>
+
       <Text style={styles.historySummary}>{summary}</Text>
+
       {item.referenceNumber ? (
-        <Text style={styles.assignmentText}>Reference: {item.referenceNumber}</Text>
+        <Text style={styles.assignmentText}>
+          Reference: {item.referenceNumber}
+        </Text>
       ) : null}
+
+      {item.adminNotes ? (
+        <Text style={styles.assignmentText}>Note: {item.adminNotes}</Text>
+      ) : null}
+
+      {item.assignment?.targetName ? (
+        <Text style={styles.assignmentText}>
+          Assigned to: {item.assignment.targetName}
+        </Text>
+      ) : null}
+
       {item.photos?.[0]?.fileUrl ? (
-        <Image source={{ uri: item.photos[0].fileUrl }} style={styles.historyProofImage} />
+        <Image
+          source={{ uri: item.photos[0].fileUrl }}
+          style={styles.historyProofImage}
+        />
       ) : null}
     </View>
   );
@@ -540,87 +821,6 @@ function createStyles(theme) {
     mainTabTextActive: {
       color: "#FFFFFF",
     },
-    typeGrid: {
-      flexDirection: "row",
-      gap: 12,
-      marginBottom: 14,
-    },
-    typeCard: {
-      flex: 1,
-      minHeight: 142,
-      borderRadius: 20,
-      padding: 14,
-      backgroundColor: theme.surface,
-      borderWidth: 1,
-      borderColor: theme.border,
-      justifyContent: "space-between",
-    },
-    typeCardActive: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
-    },
-    typeIcon: {
-      width: 42,
-      height: 42,
-      borderRadius: 15,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: theme.primarySoft,
-    },
-    typeIconActive: {
-      backgroundColor: "rgba(255,255,255,0.18)",
-    },
-    typeTitle: {
-      color: theme.text,
-      fontSize: 15,
-      fontWeight: "900",
-    },
-    typeSubtitle: {
-      color: theme.muted,
-      fontSize: 11,
-      lineHeight: 15,
-      fontWeight: "700",
-    },
-    typeTextActive: {
-      color: "#FFFFFF",
-    },
-    typeSubActive: {
-      color: "rgba(255,255,255,0.82)",
-    },
-    segment: {
-      minHeight: 48,
-      borderRadius: 16,
-      padding: 4,
-      backgroundColor: theme.surfaceAlt,
-      borderWidth: 1,
-      borderColor: theme.border,
-      flexDirection: "row",
-      marginBottom: 14,
-    },
-    segmentButton: {
-      flex: 1,
-      borderRadius: 13,
-      alignItems: "center",
-      justifyContent: "center",
-      paddingHorizontal: 8,
-    },
-    segmentButtonActive: {
-      backgroundColor: theme.surface,
-      shadowColor: "#000",
-      shadowOpacity: isDark ? 0 : 0.06,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 3 },
-      elevation: 1,
-    },
-    segmentText: {
-      color: theme.muted,
-      fontSize: 12,
-      fontWeight: "900",
-      textAlign: "center",
-    },
-    segmentTextActive: {
-      color: theme.primary,
-    },
     panel: {
       borderRadius: 22,
       padding: 16,
@@ -666,75 +866,16 @@ function createStyles(theme) {
       fontSize: 14,
       fontWeight: "800",
     },
+    textArea: {
+      minHeight: 86,
+      textAlignVertical: "top",
+    },
     fieldError: {
       marginTop: 6,
       color: theme.danger || "#DC2626",
       fontSize: 12,
       lineHeight: 16,
       fontWeight: "800",
-    },
-    picker: {
-      color: theme.text,
-      minHeight: 48,
-    },
-    textArea: {
-      minHeight: 86,
-      textAlignVertical: "top",
-    },
-    categoryGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 8,
-      marginBottom: 2,
-    },
-    categoryChip: {
-      minHeight: 36,
-      paddingHorizontal: 12,
-      borderRadius: 999,
-      backgroundColor: theme.surfaceAlt,
-      borderWidth: 1,
-      borderColor: theme.border,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    categoryChipActive: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
-    },
-    categoryText: {
-      color: theme.primary,
-      fontSize: 11,
-      fontWeight: "900",
-    },
-    categoryTextActive: {
-      color: "#FFFFFF",
-    },
-    optionRow: {
-      flexDirection: "row",
-      gap: 10,
-      marginBottom: 12,
-    },
-    optionButton: {
-      flex: 1,
-      minHeight: 42,
-      borderRadius: 14,
-      backgroundColor: theme.surfaceAlt,
-      borderWidth: 1,
-      borderColor: theme.border,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    optionButtonActive: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
-    },
-    optionText: {
-      color: theme.primary,
-      fontSize: 12,
-      fontWeight: "900",
-    },
-    optionTextActive: {
-      color: "#FFFFFF",
     },
     uploadBox: {
       minHeight: 138,
@@ -777,17 +918,6 @@ function createStyles(theme) {
     previewImage: {
       width: "100%",
       height: 190,
-    },
-    contactBlock: {
-      marginTop: 16,
-      paddingTop: 14,
-      borderTopWidth: 1,
-      borderTopColor: theme.border,
-    },
-    blockTitle: {
-      color: theme.text,
-      fontSize: 14,
-      fontWeight: "900",
     },
     submitButton: {
       minHeight: 52,
