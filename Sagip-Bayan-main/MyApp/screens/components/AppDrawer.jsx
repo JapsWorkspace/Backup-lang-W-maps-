@@ -70,7 +70,7 @@ const RESOURCE_ITEMS = [
   {
     icon: "cube-outline",
     label: "Virtual Twin",
-    route: "MainCenter",
+    route: "DigitalTwin",
   },
 ];
 

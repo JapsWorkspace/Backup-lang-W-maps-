@@ -92,16 +92,18 @@ export default function DonationScreen({ navigation }) {
 
   const { scrollRef, registerInput, scrollToInput } = useFormAutoScroll(36);
 
-  useEffect(() => {
-    if (!user) return;
-
+  const hydrateUserDetails = useCallback(() => {
     setForm((prev) => ({
       ...prev,
-      donorName: prev.donorName || getUserDisplayName(user),
-      donorPhone: prev.donorPhone || getUserPhone(user),
-      donorEmail: prev.donorEmail || getUserEmail(user),
+      donorName: getUserDisplayName(user),
+      donorPhone: getUserPhone(user),
+      donorEmail: getUserEmail(user),
     }));
   }, [user]);
+
+  useEffect(() => {
+    hydrateUserDetails();
+  }, [hydrateUserDetails]);
 
   const updateField = (key, value) => {
     setErrors((prev) => ({ ...prev, [key]: "" }));
@@ -169,15 +171,28 @@ export default function DonationScreen({ navigation }) {
     syncQueuedDonations();
   }, [fetchHistory, syncQueuedDonations]);
 
-  const resetForm = () => {
-    setForm({
-      ...INITIAL_FORM,
+  const resetMonetaryInputs = () => {
+    setForm((prev) => ({
+      ...prev,
       donorName: getUserDisplayName(user),
       donorPhone: getUserPhone(user),
       donorEmail: getUserEmail(user),
-    });
+      amount: "",
+      gcashReferenceNumber: "",
+      description: "",
+    }));
     setPhoto(null);
     setErrors({});
+  };
+
+  const resetForm = () => {
+    resetMonetaryInputs();
+  };
+
+  const openHistoryTab = () => {
+    resetMonetaryInputs();
+    setActiveTab("history");
+    fetchHistory();
   };
 
   const pickImage = async () => {
@@ -227,13 +242,13 @@ export default function DonationScreen({ navigation }) {
       form.gcashReferenceNumber
     );
 
-    const donorName = String(form.donorName || "").trim();
-    const donorPhone = String(form.donorPhone || "").trim();
-    const donorEmail = String(form.donorEmail || "").trim();
+    const donorName = getUserDisplayName(user);
+    const donorPhone = getUserPhone(user);
+    const donorEmail = getUserEmail(user);
     const description = String(form.description || "").trim();
 
     if (!donorName) {
-      nextErrors.donorName = "Donor name is required.";
+      nextErrors.donorName = "Donor name is missing from your account.";
     }
 
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -307,12 +322,9 @@ export default function DonationScreen({ navigation }) {
     setQueuedCount(next.length);
   };
 
-  const submitDonation = async () => {
+  const performSubmitDonation = async (payload) => {
     try {
       setSubmitting(true);
-
-      const payload = buildPayload();
-      setErrors({});
 
       try {
         await submitDonationPayload(payload, photo);
@@ -340,11 +352,40 @@ export default function DonationScreen({ navigation }) {
       fetchHistory();
     } catch (err) {
       Alert.alert(
-        "Donation details needed",
-        err?.message || "Please check the form."
+        "Submission failed",
+        err?.message || "Unable to submit your donation."
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const submitDonation = () => {
+    try {
+      const payload = buildPayload();
+      setErrors({});
+
+      const amountLabel = Number(payload.amount || 0).toLocaleString("en-PH");
+
+      Alert.alert(
+        "Confirm Donation",
+        `Are you sure you want to submit a GCash monetary donation of PHP ${amountLabel}?`,
+        [
+          {
+            text: "No",
+            style: "cancel",
+          },
+          {
+            text: "Yes",
+            onPress: () => performSubmitDonation(payload),
+          },
+        ]
+      );
+    } catch (err) {
+      Alert.alert(
+        "Donation details needed",
+        err?.message || "Please check the form."
+      );
     }
   };
 
@@ -404,10 +445,7 @@ export default function DonationScreen({ navigation }) {
               icon="time-outline"
               label="My Donation History"
               active={activeTab === "history"}
-              onPress={() => {
-                setActiveTab("history");
-                fetchHistory();
-              }}
+              onPress={openHistoryTab}
               styles={styles}
             />
           </View>
@@ -486,6 +524,19 @@ function FieldError({ message, styles }) {
   return message ? <Text style={styles.fieldError}>{message}</Text> : null;
 }
 
+function ReadOnlyField({ label, value, styles }) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={[styles.inputShell, styles.readOnlyShell]}>
+        <Text style={styles.readOnlyText}>
+          {value ? value : "Not provided"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function MonetaryFields({
   form,
   updateField,
@@ -498,48 +549,37 @@ function MonetaryFields({
 }) {
   return (
     <>
-      <Field label="Donor name" styles={styles}>
-        <TextInput
-          style={styles.input}
-          placeholder="Full name"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.donorName}
-          onFocus={() => scrollToInput("donorName")}
-          onLayout={registerInput("donorName")}
-          onChangeText={(value) => updateField("donorName", value)}
-          maxLength={120}
-        />
-        <FieldError message={errors.donorName} styles={styles} />
-      </Field>
+      <View style={styles.accountInfoBox}>
+        <View style={styles.accountInfoIcon}>
+          <Ionicons name="person-circle-outline" size={22} color={styles.iconColor} />
+        </View>
 
-      <Field label="Contact number" styles={styles}>
-        <TextInput
-          style={styles.input}
-          keyboardType="phone-pad"
-          placeholder="Mobile number"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.donorPhone}
-          onFocus={() => scrollToInput("donorPhone")}
-          onLayout={registerInput("donorPhone")}
-          onChangeText={(value) => updateField("donorPhone", value)}
-          maxLength={40}
-        />
-      </Field>
+        <View style={styles.accountInfoCopy}>
+          <Text style={styles.accountInfoTitle}>Account details</Text>
+          <Text style={styles.accountInfoText}>
+            Donor details are automatically taken from your account and cannot
+            be edited here.
+          </Text>
+        </View>
+      </View>
 
-      <Field label="Email address" styles={styles}>
-        <TextInput
-          style={styles.input}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          placeholder="Email address"
-          placeholderTextColor={styles.placeholderColor}
-          value={form.donorEmail}
-          onFocus={() => scrollToInput("donorEmail")}
-          onLayout={registerInput("donorEmail")}
-          onChangeText={(value) => updateField("donorEmail", value)}
-          maxLength={120}
-        />
-      </Field>
+      <ReadOnlyField
+        label="Donor name"
+        value={form.donorName}
+        styles={styles}
+      />
+
+      <ReadOnlyField
+        label="Contact number"
+        value={form.donorPhone}
+        styles={styles}
+      />
+
+      <ReadOnlyField
+        label="Email address"
+        value={form.donorEmail}
+        styles={styles}
+      />
 
       <Field label="Amount" styles={styles}>
         <TextInput
@@ -842,6 +882,41 @@ function createStyles(theme) {
       lineHeight: 17,
       fontWeight: "700",
     },
+    accountInfoBox: {
+      marginTop: 10,
+      marginBottom: 2,
+      borderRadius: 16,
+      padding: 12,
+      backgroundColor: theme.primarySoft || theme.surfaceAlt,
+      borderWidth: 1,
+      borderColor: theme.border,
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    accountInfoIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 12,
+      backgroundColor: theme.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    accountInfoCopy: {
+      flex: 1,
+    },
+    accountInfoTitle: {
+      color: theme.text,
+      fontSize: 12,
+      fontWeight: "900",
+    },
+    accountInfoText: {
+      marginTop: 2,
+      color: theme.muted,
+      fontSize: 11,
+      lineHeight: 15,
+      fontWeight: "700",
+    },
     field: {
       marginTop: 12,
     },
@@ -859,6 +934,15 @@ function createStyles(theme) {
       borderWidth: 1,
       borderColor: theme.border,
       justifyContent: "center",
+    },
+    readOnlyShell: {
+      opacity: 0.82,
+    },
+    readOnlyText: {
+      color: theme.muted,
+      paddingVertical: 12,
+      fontSize: 14,
+      fontWeight: "800",
     },
     input: {
       color: theme.text,
