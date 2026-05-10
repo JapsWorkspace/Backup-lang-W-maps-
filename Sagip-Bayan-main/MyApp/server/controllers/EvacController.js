@@ -3,6 +3,8 @@ const Place = require("../models/EvacPlace.js");
 const EHistory = require("../models/EvacHistory.js");
 const BarangayStock = require("../models/BarangayStock");
 const BarangayStockTransaction = require("../models/BarangayStockTransaction");
+const UserModel = require("../models/User");
+const dispatchMultiChannelNotification = require("../utils/dispatchMultiChannelNotification");
 
 // Sanitize input
 // Sanitize input
@@ -22,6 +24,144 @@ const toBoolean = (value) => {
     return value === "true" || value === "1";
   }
   return Boolean(value);
+};
+
+const normalizePriorityLevel = (value) => {
+  const priority = String(value || "").trim().toLowerCase();
+  if (priority === "normal") return "normal";
+  return ["normal", "high", "critical"].includes(priority) ? priority : "";
+};
+
+const escapeRegex = (value) => {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const buildEvacuationAdvisoryMessage = (place, req) => {
+  const customMessage = sanitizeText(req.body?.message || req.body?.advisoryMessage);
+  if (customMessage) return customMessage;
+
+  const status = sanitizeText(place?.capacityStatus || "available");
+  const name = sanitizeText(place?.name || "an evacuation center");
+  const barangay = sanitizeText(place?.barangayName);
+
+  return [
+    `Evacuation advisory posted for ${name}.`,
+    barangay ? `Barangay: ${barangay}.` : "",
+    `Current status: ${status}.`,
+    "Please open the SagipBayan app for full details.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+};
+
+const getEvacuationDispatchOptions = (req) => {
+  const priority = normalizePriorityLevel(req.body?.priority || req.body?.priorityLevel);
+  const urgent =
+    toBoolean(req.body?.urgent) || ["high", "critical"].includes(priority);
+
+  return {
+    shouldNotify:
+      toBoolean(req.body?.sendAdvisory) ||
+      toBoolean(req.body?.sendSms) ||
+      toBoolean(req.body?.sendEmail) ||
+      urgent,
+    urgent,
+    sendSms: urgent && (req.body?.sendSms === undefined ? true : toBoolean(req.body?.sendSms)),
+    sendEmail: urgent || toBoolean(req.body?.sendEmail),
+  };
+};
+
+const notifyEvacuationAdvisory = async (place, req) => {
+  const dispatchOptions = getEvacuationDispatchOptions(req);
+  if (!dispatchOptions.shouldNotify || !place) return;
+
+  const barangayName = sanitizeText(place.barangayName);
+  const targetAll = toBoolean(req.body?.targetAll);
+  const dedupeKey = `evacuation:${place._id}:${sanitizeText(place.capacityStatus)}:advisory`;
+  const title = sanitizeText(req.body?.title) || "Evacuation advisory posted";
+  const message = buildEvacuationAdvisoryMessage(place, req);
+  const userFilter = {
+    isArchived: { $ne: true },
+    "notifications.dedupeKey": { $ne: dedupeKey },
+  };
+
+  if (!targetAll && barangayName) {
+    userFilter.barangay = new RegExp(`^${escapeRegex(barangayName)}$`, "i");
+  }
+
+  const users = await UserModel.find(userFilter).select(
+    "_id email phone phoneNumber fname lname barangay district address street streetAddress"
+  );
+
+  if (!users.length) {
+    console.log("[evac advisory] no users to notify", {
+      placeId: String(place._id),
+      barangay: barangayName,
+      targetAll,
+    });
+    return;
+  }
+
+  const notification = {
+    _id: new mongoose.Types.ObjectId(),
+    type: "evacuation",
+    module: "evacuation",
+    priority: dispatchOptions.urgent ? "high" : "normal",
+    title,
+    message,
+    referenceId: place._id,
+    referenceModel: "EvacPlace",
+    target: targetAll ? "all" : "barangays",
+    source: "mdrrmo",
+    sourceLabel: "Evacuation Advisory",
+    official: true,
+    notificationType: dispatchOptions.urgent ? "danger" : "normal",
+    soundType: dispatchOptions.urgent ? "danger" : "notification",
+    targetBarangays: barangayName ? [barangayName] : [],
+    targetUsers: users.map((user) => user._id),
+    dedupeKey,
+    actionable: false,
+    read: false,
+    isRead: false,
+    createdAt: new Date(),
+    metadata: {
+      evacPlaceId: place._id,
+      capacityStatus: place.capacityStatus,
+      barangay: barangayName,
+    },
+  };
+
+  await UserModel.updateMany(
+    {
+      _id: { $in: users.map((user) => user._id) },
+      "notifications.dedupeKey": { $ne: dedupeKey },
+    },
+    {
+      $push: {
+        notifications: notification,
+      },
+    }
+  );
+
+  await dispatchMultiChannelNotification({
+    users,
+    title,
+    message,
+    type: "evacuation",
+    referenceId: `${place._id}:${sanitizeText(place.capacityStatus)}`,
+    notificationId: notification._id,
+    urgent: dispatchOptions.urgent,
+    sendSms: dispatchOptions.sendSms,
+    sendEmail: dispatchOptions.sendEmail,
+    barangay: barangayName,
+  });
+
+  console.log("[evac advisory] notification created", {
+    placeId: String(place._id),
+    users: users.length,
+    targetAll,
+    barangay: barangayName,
+  });
 };
 
 const buildHistoryMeta = (
@@ -365,18 +505,7 @@ const updateCapacityStatus = async (req, res) => {
     }
     const updated = await Place.findByIdAndUpdate(
       id,
-      {
-        capacityStatus,
-
-        femaleCR: Boolean(femaleCR),
-        maleCR: Boolean(maleCR),
-        commonCR: Boolean(commonCR),
-        potableWater: Boolean(potableWater),
-        nonPotableWater: Boolean(nonPotableWater),
-
-        isPermanent: Boolean(isPermanent),
-        isCovidFacility: Boolean(isCovidFacility),
-      },
+      { capacityStatus },
       { new: true }
     );
 
@@ -390,6 +519,8 @@ const updateCapacityStatus = async (req, res) => {
       details: `Status changed to ${capacityStatus}`,
       ...buildHistoryMeta(req, updated),
     });
+
+    await notifyEvacuationAdvisory(updated, req);
 
     res.json(updated);
   } catch (err) {

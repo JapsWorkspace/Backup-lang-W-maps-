@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Announcement = require("../models/Announcement");
 const UserModel = require("../models/User");
 const cloudinary = require("../config/cloudinary");
+const dispatchMultiChannelNotification = require("../utils/dispatchMultiChannelNotification");
 
 const ANNOUNCEMENT_NOTIFICATION_LOOKBACK_DAYS = 30;
 
@@ -17,9 +18,23 @@ function normalizeAnnouncementStatus(value) {
   return ["draft", "published", "archived"].includes(status) ? status : "draft";
 }
 
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  return ["true", "1", "yes", "y"].includes(String(value || "").trim().toLowerCase());
+}
+
+function normalizePriorityLevel(value) {
+  const priority = String(value || "").trim().toLowerCase();
+  if (priority === "normal") return "medium";
+  return ["low", "medium", "high", "critical"].includes(priority) ? priority : "";
+}
+
 function normalizeAnnouncementPayload(payload = {}) {
   const nextPayload = { ...payload };
   const publishedValue = nextPayload.published ?? nextPayload.isPublished;
+  const priorityLevel = normalizePriorityLevel(
+    nextPayload.priorityLevel || nextPayload.priority
+  );
 
   if (nextPayload.status !== undefined) {
     nextPayload.status = normalizeAnnouncementStatus(nextPayload.status);
@@ -30,8 +45,16 @@ function normalizeAnnouncementPayload(payload = {}) {
     nextPayload.status = "published";
   }
 
+  if (priorityLevel) {
+    nextPayload.priorityLevel = priorityLevel;
+  }
+
   delete nextPayload.published;
   delete nextPayload.isPublished;
+  delete nextPayload.priority;
+  delete nextPayload.urgent;
+  delete nextPayload.sendSms;
+  delete nextPayload.sendEmail;
   delete nextPayload.viewedBy;
   delete nextPayload.likedBy;
   delete nextPayload.views;
@@ -97,6 +120,32 @@ function buildPublishedAnnouncementNotification(announcement) {
     isRead: false,
     createdAt: announcement.publishedNotificationSentAt || announcement.updatedAt || new Date(),
   };
+}
+
+function getAnnouncementDispatchOptions(announcement, payload = {}) {
+  const priority = normalizePriorityLevel(
+    payload.priority || payload.priorityLevel || announcement?.priorityLevel
+  );
+  const category = String(announcement?.category || payload.category || "").toLowerCase();
+  const urgent =
+    parseBoolean(payload.urgent) ||
+    ["high", "critical"].includes(priority) ||
+    category === "emergency";
+
+  return {
+    urgent,
+    sendSms: urgent && (payload.sendSms === undefined ? true : parseBoolean(payload.sendSms)),
+    sendEmail: urgent || parseBoolean(payload.sendEmail),
+  };
+}
+
+function buildAnnouncementDispatchMessage(announcement) {
+  return [
+    sanitizeText(announcement?.title, 150),
+    sanitizeText(announcement?.description, 1500),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function getPublishedNotificationTime(announcement) {
@@ -220,7 +269,7 @@ async function ensureAnnouncementNotificationsForUser(userId, announcements = []
   console.log("[notifications] notification type", "announcement");
 }
 
-async function notifyPublishedAnnouncement(announcement, action = "published") {
+async function notifyPublishedAnnouncement(announcement, action = "published", payload = {}) {
   if (String(announcement?.status || "").toLowerCase() !== "published") return;
   if (announcement?.publishedNotificationSent) {
     console.log("[announcements] shouldNotify:", false, {
@@ -250,6 +299,24 @@ async function notifyPublishedAnnouncement(announcement, action = "published") {
   announcement.publishedNotificationSent = true;
   announcement.publishedNotificationSentAt = new Date();
   await announcement.save();
+
+  const dispatchOptions = getAnnouncementDispatchOptions(announcement, payload);
+  if (dispatchOptions.sendSms || dispatchOptions.sendEmail) {
+    const users = await UserModel.find({ isArchived: { $ne: true } }).select(
+      "_id email phone phoneNumber fname lname barangay district address street streetAddress"
+    );
+
+    await dispatchMultiChannelNotification({
+      users,
+      title: sanitizeText(announcement?.title, 120) || "MDRRMO Announcement",
+      message: buildAnnouncementDispatchMessage(announcement),
+      type: "announcement",
+      referenceId: announcement._id,
+      urgent: dispatchOptions.urgent,
+      sendSms: dispatchOptions.sendSms,
+      sendEmail: dispatchOptions.sendEmail,
+    });
+  }
 
   console.log("[notifications] announcement notification created:", {
     announcementId: String(announcement._id),
@@ -296,7 +363,7 @@ const createAnnouncement = async (req, res) => {
 
     const savedStatus = String(announcement.status || "").toLowerCase().trim();
     if (savedStatus === "published") {
-      await notifyPublishedAnnouncement(announcement, "published");
+      await notifyPublishedAnnouncement(announcement, "published", req.body);
     }
 
     res
@@ -396,7 +463,7 @@ const updateAnnouncement = async (req, res) => {
       nextStatus === "published" &&
       !announcement.publishedNotificationSent
     ) {
-      await notifyPublishedAnnouncement(announcement, "published");
+      await notifyPublishedAnnouncement(announcement, "published", req.body);
     }
 
     res.json(toClientAnnouncement(announcement, getRequestUserId(req), true));

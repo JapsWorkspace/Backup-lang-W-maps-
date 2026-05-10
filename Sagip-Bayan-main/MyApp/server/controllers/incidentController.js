@@ -3,6 +3,7 @@ const HistoryModel = require("../models/History");
 const UserModel = require("../models/User");
 const cloudinary = require("../config/cloudinary");
 const mongoose = require("mongoose");
+const dispatchMultiChannelNotification = require("../utils/dispatchMultiChannelNotification");
 
 const DUPLICATE_INCIDENT_RADIUS_METERS = 200;
 const INCIDENT_USER_ALERT_RADIUS_METERS = 1000;
@@ -85,6 +86,11 @@ function sanitizeText(value, max = 200) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  return ["true", "1", "yes", "y"].includes(String(value || "").trim().toLowerCase());
 }
 
 function sanitizePhone(value) {
@@ -562,6 +568,30 @@ async function notifyReporterIncidentApproved(req, incident) {
         notificationId: String(notification._id || ""),
         ...getNotificationStorageDebugInfo(),
       });
+
+      const reporterUser = await UserModel.findById(reporterUserId).select(
+        "_id email phone phoneNumber fname lname barangay district address street streetAddress"
+      );
+      const sendEmail =
+        req.body?.sendEmail === undefined ? true : parseBoolean(req.body?.sendEmail);
+      const sendSms = parseBoolean(req.body?.sendSms) && parseBoolean(req.body?.urgent);
+
+      if (reporterUser && (sendEmail || sendSms)) {
+        await dispatchMultiChannelNotification({
+          users: [reporterUser],
+          title: "Incident Report Verified",
+          message:
+            "Your reported incident has been reviewed and verified by the MDRRMO. It has been approved as a valid incident and is now visible on the public map for community awareness.",
+          type: "incident_approved",
+          referenceId: incident._id,
+          notificationId: notification._id,
+          urgent: sendSms,
+          sendSms,
+          sendEmail,
+          barangay: incident.barangay || reporterUser.barangay || "",
+          incidentType: formatIncidentTypeLabel(incident.type),
+        });
+      }
     } else {
       console.log("[reporter approval notification skipped duplicate]", {
         incidentId: String(incident._id),
@@ -735,7 +765,7 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
     if (!query.$or.length) return;
 
     const users = await UserModel.find(query).select(
-      "_id fname lname username phone barangay location notifications avatar"
+      "_id fname lname username email phone phoneNumber barangay district address street streetAddress location notifications avatar"
     );
 
     if (!users.length) {
@@ -788,7 +818,7 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
       return;
     }
 
-    await Promise.all(
+    const notificationResults = await Promise.all(
       notifyTargets.map((user) =>
         addNotification(user._id, {
           type: notificationType,
@@ -807,9 +837,23 @@ async function notifyUsersInSameBarangay({ incident, excludeUsername, excludePho
         })
       )
     );
+    const deliveryTargets = notifyTargets.filter((_, index) => notificationResults[index]);
+
+    await dispatchMultiChannelNotification({
+      users: deliveryTargets,
+      title: "Incident reported in your barangay",
+      message,
+      type: "nearby_incident",
+      referenceId: incident._id,
+      urgent: true,
+      sendSms: true,
+      sendEmail: true,
+      barangay,
+      incidentType,
+    });
 
     console.log(
-      `[incident notify] Sent ${notifyTargets.length} nearby_incident notifications for barangay ${barangay}.`
+      `[incident notify] Sent ${deliveryTargets.length} nearby_incident notifications for barangay ${barangay}.`
     );
   } catch (err) {
     console.error("Nearby incident notification error:", err);
@@ -897,7 +941,7 @@ async function notifyNearbyRepeatedIncidents(incident) {
         $in: affectedBarangays.map((name) => new RegExp(`^${escapeRegex(name)}$`, "i")),
       },
       isArchived: { $ne: true },
-    }).select("_id barangay");
+    }).select("_id email phone phoneNumber barangay district address street streetAddress");
 
     if (!users.length) {
       console.log("[incident notify] No users found for incident cluster:", dedupeKey);
@@ -906,7 +950,7 @@ async function notifyNearbyRepeatedIncidents(incident) {
 
     const message = getIncidentClusterMessage(type, barangayCount);
 
-    await Promise.all(
+    const notificationResults = await Promise.all(
       users.map((user) =>
         addNotification(user._id, {
           type: "nearby_repeated_incident",
@@ -925,6 +969,20 @@ async function notifyNearbyRepeatedIncidents(incident) {
         })
       )
     );
+    const deliveryTargets = users.filter((_, index) => notificationResults[index]);
+
+    await dispatchMultiChannelNotification({
+      users: deliveryTargets,
+      title: "Multiple incident reports nearby",
+      message,
+      type: "nearby_repeated_incident",
+      referenceId: dedupeKey,
+      urgent: true,
+      sendSms: true,
+      sendEmail: true,
+      barangay,
+      incidentType: formatIncidentTypeLabel(type),
+    });
 
     console.log(
       `[incident notify] Cluster ${threshold.level} sent for ${type}: ${totalReports} public reports across ${barangayCount} barangays.`
@@ -972,7 +1030,7 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
     const users = await UserModel.find({
       barangay: { $regex: new RegExp(`^${escapeRegex(barangay)}$`, "i") },
       isArchived: { $ne: true },
-    }).select("_id barangay");
+    }).select("_id email phone phoneNumber barangay district address street streetAddress");
 
     if (!users.length) {
       console.log("[incident notify] No users found for barangay danger threshold:", barangay);
@@ -981,7 +1039,7 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
 
     const message = getBarangayDangerMessage(dominantType);
 
-    await Promise.all(
+    const notificationResults = await Promise.all(
       users.map((user) =>
         addNotification(user._id, {
           type: "barangay_incident_danger",
@@ -1000,6 +1058,20 @@ async function notifyBarangayIncidentDangerThreshold(incident) {
         })
       )
     );
+    const deliveryTargets = users.filter((_, index) => notificationResults[index]);
+
+    await dispatchMultiChannelNotification({
+      users: deliveryTargets,
+      title: "Barangay danger warning",
+      message,
+      type: "barangay_incident_danger",
+      referenceId: dedupeKey,
+      urgent: true,
+      sendSms: true,
+      sendEmail: true,
+      barangay,
+      incidentType: formatIncidentTypeLabel(dominantType),
+    });
 
     console.log(
       `[incident notify] Barangay danger threshold ${threshold.level} reached for ${barangay}: ${totalCount} public reports, dominant ${dominantType}.`

@@ -61,6 +61,7 @@ import {
   safeDisplayText,
   toNumber,
 } from "./utils/validation";
+import { rankEvacuationCentersForUser } from "./utils/evacuationRecommendations";
 
 const EDGE_PADDING = {
   top: 120,
@@ -1441,7 +1442,7 @@ function getEvacStatusCopy(status) {
   };
 }
 
-function EvacuationPlaceMarker({ color, selected = false, label }) {
+function EvacuationPlaceMarker({ color, selected = false, label, badge = "" }) {
   return (
     <View style={styles.evacMarkerShell} collapsable={false}>
       {selected ? (
@@ -1451,6 +1452,13 @@ function EvacuationPlaceMarker({ color, selected = false, label }) {
               {label}
             </Text>
           </View>
+          {badge ? (
+            <View style={styles.evacMarkerBadge}>
+              <Text style={styles.evacMarkerBadgeText} numberOfLines={1}>
+                {badge}
+              </Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -2022,16 +2030,19 @@ const {
     showBarangayMarkers && (showHomepageBarangays || isBarangay || isEvac);
 
   const normalizedEvacPlaces = useMemo(
-    () =>
-      safeArray(evacPlaces)
+    () => {
+      const places = safeArray(evacPlaces)
         .map(normalizePlace)
         .filter(Boolean)
         .map((place) => ({
           ...place,
           coordinate: toMarkerCoordinate(place),
         }))
-        .filter((place) => place.coordinate),
-    [evacPlaces]
+        .filter((place) => place.coordinate);
+
+      return rankEvacuationCentersForUser(user, places);
+    },
+    [evacPlaces, user]
   );
 
   const normalizedSelectedEvac = useMemo(() => normalizePlace(evac), [evac]);
@@ -3763,6 +3774,7 @@ if (!incidentDebugMode && !isPointInsideJaenBoundary({ latitude, longitude })) {
                   color={getEvacStatusColor(place.capacityStatus)}
                   selected={isSelected}
                   label={safeDisplayText(place?.name, "Evacuation center")}
+                  badge={place.isRecommended ? "Recommended" : ""}
                 />
               </SafeMarker>
             );
@@ -4085,30 +4097,39 @@ function ModulePanel({
     const withSpace = (place) =>
       String(place.capacityStatus || "").toLowerCase() !== "full" &&
       Number(place.availableSlots ?? ((place.capacityIndividual || 0) - (place.currentOccupants || 0))) > 0;
+    const recommendationRank = (place) => Number(place.recommendationRank || 99);
+    const byRecommendedThen = (secondarySort) => (a, b) => {
+      const rankDiff = recommendationRank(a) - recommendationRank(b);
+      if (rankDiff !== 0) return rankDiff;
+      return secondarySort(a, b);
+    };
+    const byDistance = (a, b) =>
+      distance(routeStartCoordinate, a.coordinate) - distance(routeStartCoordinate, b.coordinate);
+    const byAvailability = (a, b) =>
+      Number(b.availableSlots ?? ((b.capacityIndividual || 0) - (b.currentOccupants || 0))) -
+      Number(a.availableSlots ?? ((a.capacityIndividual || 0) - (a.currentOccupants || 0)));
+    const byBarangay = (a, b) =>
+      String(a.barangayName || "").localeCompare(String(b.barangayName || ""));
 
     if (evacFilter === "most-available") {
-      return items.sort(
-        (a, b) =>
-          Number(b.availableSlots ?? ((b.capacityIndividual || 0) - (b.currentOccupants || 0))) -
-          Number(a.availableSlots ?? ((a.capacityIndividual || 0) - (a.currentOccupants || 0)))
-      );
+      return items.sort(byRecommendedThen(byAvailability));
     }
 
     if (evacFilter === "full") {
-      return items.filter((place) => String(place.capacityStatus || "").toLowerCase() === "full");
+      return items
+        .filter((place) => String(place.capacityStatus || "").toLowerCase() === "full")
+        .sort(byRecommendedThen(byDistance));
     }
 
     if (evacFilter === "has-space") {
-      return items.filter(withSpace);
+      return items.filter(withSpace).sort(byRecommendedThen(byDistance));
     }
 
     if (evacFilter === "barangay") {
-      return items.sort((a, b) =>
-        String(a.barangayName || "").localeCompare(String(b.barangayName || ""))
-      );
+      return items.sort(byRecommendedThen(byBarangay));
     }
 
-    return items.sort((a, b) => distance(routeStartCoordinate, a.coordinate) - distance(routeStartCoordinate, b.coordinate));
+    return items.sort(byRecommendedThen(byDistance));
   }, [evacFilter, normalizedEvacPlaces, routeStartCoordinate]);
 
   const evacPlacesByStatus = useMemo(
@@ -4325,7 +4346,7 @@ function ModulePanel({
     return (
       <TouchableOpacity
         key={place?._id || `${place?.latitude}-${place?.longitude}`}
-        style={styles.evacCard}
+        style={[styles.evacCard, place.isRecommended && styles.evacCardRecommended]}
         onPress={() => selectEvac(place)}
       >
         <View
@@ -4353,6 +4374,26 @@ function ModulePanel({
           <Text style={styles.evacMeta} numberOfLines={1}>
             {currentOccupants}/{totalCapacity} occupants | {availableSlots} slots | {occupancyPercentage}%
           </Text>
+          <View style={styles.recommendationBadgeRow}>
+            {place.isRecommended ? (
+              <Text style={[styles.recommendationBadge, styles.recommendationBadgePrimary]}>
+                Recommended
+              </Text>
+            ) : null}
+            <Text
+              style={[
+                styles.recommendationBadge,
+                place.isRecommended
+                  ? styles.recommendationBadgeBarangay
+                  : styles.recommendationBadgeNeutral,
+              ]}
+              numberOfLines={1}
+            >
+              {place.recommendationScopeLabel ||
+                place.recommendationBadge ||
+                "Other Evacuation Center"}
+            </Text>
+          </View>
         </View>
         <View
           style={[
@@ -5130,6 +5171,26 @@ function ModulePanel({
                       <Text style={styles.evacMeta}>
                         {evac.barangayName || evac.location || "Selected evacuation place"}
                       </Text>
+                      <View style={styles.recommendationBadgeRow}>
+                        {evac.isRecommended ? (
+                          <Text style={[styles.recommendationBadge, styles.recommendationBadgePrimary]}>
+                            Recommended
+                          </Text>
+                        ) : null}
+                        <Text
+                          style={[
+                            styles.recommendationBadge,
+                            evac.isRecommended
+                              ? styles.recommendationBadgeBarangay
+                              : styles.recommendationBadgeNeutral,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {evac.recommendationScopeLabel ||
+                            evac.recommendationBadge ||
+                            "Other Evacuation Center"}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                   <View
@@ -6687,6 +6748,23 @@ const styles = StyleSheet.create({
     color: "#14532D",
   },
 
+  evacMarkerBadge: {
+    alignSelf: "center",
+    marginTop: 4,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: "#14532D",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.9)",
+  },
+
+  evacMarkerBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "900",
+  },
+
   evacMarkerPin: {
     width: 32,
     height: 32,
@@ -6954,6 +7032,11 @@ barangayIncidentTooltipText: {
     elevation: 1,
   },
 
+  evacCardRecommended: {
+    borderColor: "#86efac",
+    backgroundColor: "#f0fdf4",
+  },
+
   evacIconBadge: {
     width: 34,
     height: 34,
@@ -6997,6 +7080,38 @@ barangayIncidentTooltipText: {
     color: "#6b7280",
     fontSize: 12,
     fontWeight: "600",
+  },
+
+  recommendationBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 7,
+  },
+
+  recommendationBadge: {
+    overflow: "hidden",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 10,
+    fontWeight: "900",
+  },
+
+  recommendationBadgePrimary: {
+    color: "#FFFFFF",
+    backgroundColor: "#14532D",
+  },
+
+  recommendationBadgeBarangay: {
+    color: "#14532D",
+    backgroundColor: "#DCFCE7",
+  },
+
+  recommendationBadgeNeutral: {
+    color: "#374151",
+    backgroundColor: "#F3F4F6",
   },
 
   selectedPlace: {

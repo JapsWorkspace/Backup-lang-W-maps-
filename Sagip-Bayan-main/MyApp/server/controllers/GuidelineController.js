@@ -3,6 +3,7 @@ const PostingGuideline = require("../models/Guidelines");
 const UserModel = require("../models/User");
 const mongoose = require("mongoose");
 const cloudinary = require("../config/cloudinary");
+const dispatchMultiChannelNotification = require("../utils/dispatchMultiChannelNotification");
 
 const GUIDELINE_NOTIFICATION_LOOKBACK_DAYS = 30;
 
@@ -18,9 +19,23 @@ function normalizeGuidelineStatus(value) {
   return ["draft", "published", "archived"].includes(status) ? status : "draft";
 }
 
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  return ["true", "1", "yes", "y"].includes(String(value || "").trim().toLowerCase());
+}
+
+function normalizePriorityLevel(value) {
+  const priority = String(value || "").trim().toLowerCase();
+  if (priority === "normal") return "medium";
+  return ["low", "medium", "high", "critical"].includes(priority) ? priority : "";
+}
+
 function normalizeGuidelinePayload(payload = {}) {
   const nextPayload = { ...payload };
   const publishedValue = nextPayload.published ?? nextPayload.isPublished;
+  const priorityLevel = normalizePriorityLevel(
+    nextPayload.priorityLevel || nextPayload.priority
+  );
 
   if (nextPayload.status !== undefined) {
     nextPayload.status = normalizeGuidelineStatus(nextPayload.status);
@@ -31,8 +46,16 @@ function normalizeGuidelinePayload(payload = {}) {
     nextPayload.status = "published";
   }
 
+  if (priorityLevel) {
+    nextPayload.priorityLevel = priorityLevel;
+  }
+
   delete nextPayload.published;
   delete nextPayload.isPublished;
+  delete nextPayload.priority;
+  delete nextPayload.urgent;
+  delete nextPayload.sendSms;
+  delete nextPayload.sendEmail;
 
   return nextPayload;
 }
@@ -73,6 +96,28 @@ function buildPublishedGuidelineNotification(guideline) {
     isRead: false,
     createdAt: guideline.publishedNotificationSentAt || guideline.updatedAt || new Date(),
   };
+}
+
+function getGuidelineDispatchOptions(guideline, payload = {}) {
+  const priority = normalizePriorityLevel(
+    payload.priority || payload.priorityLevel || guideline?.priorityLevel
+  );
+  const urgent = parseBoolean(payload.urgent) || ["high", "critical"].includes(priority);
+
+  return {
+    urgent,
+    sendSms: urgent && (payload.sendSms === undefined ? true : parseBoolean(payload.sendSms)),
+    sendEmail: urgent || parseBoolean(payload.sendEmail),
+  };
+}
+
+function buildGuidelineDispatchMessage(guideline) {
+  return [
+    sanitizeText(guideline?.title, 150),
+    sanitizeText(guideline?.description, 1500),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function getPublishedNotificationTime(guideline) {
@@ -215,7 +260,7 @@ function toClientGuideline(guideline, userId = null, includeUserLists = false) {
   };
 }
 
-async function notifyPublishedGuideline(guideline, action = "published") {
+async function notifyPublishedGuideline(guideline, action = "published", payload = {}) {
   if (String(guideline?.status || "").toLowerCase() !== "published") return;
   if (guideline?.publishedNotificationSent) {
     console.log("[guidelines] shouldNotify:", false, {
@@ -245,6 +290,24 @@ async function notifyPublishedGuideline(guideline, action = "published") {
   guideline.publishedNotificationSent = true;
   guideline.publishedNotificationSentAt = new Date();
   await guideline.save();
+
+  const dispatchOptions = getGuidelineDispatchOptions(guideline, payload);
+  if (dispatchOptions.sendSms || dispatchOptions.sendEmail) {
+    const users = await UserModel.find({ isArchived: { $ne: true } }).select(
+      "_id email phone phoneNumber fname lname barangay district address street streetAddress"
+    );
+
+    await dispatchMultiChannelNotification({
+      users,
+      title: sanitizeText(guideline?.title, 120) || "MDRRMO Guideline",
+      message: buildGuidelineDispatchMessage(guideline),
+      type: "guideline",
+      referenceId: guideline._id,
+      urgent: dispatchOptions.urgent,
+      sendSms: dispatchOptions.sendSms,
+      sendEmail: dispatchOptions.sendEmail,
+    });
+  }
 
   console.log("[notifications] guideline notification created:", {
     guidelineId: String(guideline._id),
@@ -296,7 +359,7 @@ const createGuideline = async (req, res) => {
     console.log("[guidelines] shouldNotify:", shouldNotify);
 
     if (shouldNotify) {
-      await notifyPublishedGuideline(guideline, "published");
+      await notifyPublishedGuideline(guideline, "published", req.body);
     }
 
     return res.status(201).json(toClientGuideline(guideline, getRequestUserId(req), true));
@@ -479,7 +542,7 @@ const updateGuideline = async (req, res) => {
     console.log("[guidelines] shouldNotify:", shouldNotify);
 
     if (shouldNotify) {
-      await notifyPublishedGuideline(guideline, "published");
+      await notifyPublishedGuideline(guideline, "published", req.body);
     }
 
     res.json(toClientGuideline(guideline, getRequestUserId(req), true));
